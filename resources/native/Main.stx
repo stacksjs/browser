@@ -3,10 +3,12 @@ import { displayHost, displayTitle, resolveInput } from '../functions/browser/ad
 import { tabsToSleep } from '../functions/browser/hibernation'
 import { createHistoryClient } from '../functions/browser/history-client'
 import { browserMenus } from '../functions/browser/keymap'
+import { applyDownload, createLibraryClient, downloadFraction, formatBytes, formatTime, groupByDay } from '../functions/browser/library'
+import { rowMenu, runRowAction } from '../functions/browser/menus'
 import { createPages } from '../functions/browser/pages'
 import { rank } from '../functions/browser/rank'
 import { createSessionClient } from '../functions/browser/session'
-import { addFavorite, clearToday, closeTab, createState, moveItem, openTab, pinTab, reopenClosed, rows, selectTab, switchSpace, tabOrder, unpinTab, updateItem } from '../functions/browser/sidebar'
+import { addFavorite, clearToday, closeTab, createState, leaveSplit, moveItem, openTab, pinTab, renameItem, reopenClosed, rows, selectTab, splitOf, splitTabs, switchSpace, tabOrder, unpinTab, updateItem } from '../functions/browser/sidebar'
 
 const web = craft.web
 // The sidebar lives in the agent's database (app/Desktop/Agent.ts); it draws once that answers.
@@ -24,6 +26,13 @@ const pinned = derived(() => rows(browser(), 'pinned'))
 const today = derived(() => rows(browser(), 'today'))
 const shownId = derived(() => browser().selected[browser().activeSpace] ?? null)
 const shownTab = derived(() => (shownId() ? browser().items[shownId()] : null))
+// A tab in a split view shows beside the others; the one picked last is the one the toolbar drives.
+const panes = derived(() => {
+  const id = shownId()
+  if (!id) return []
+  const split = splitOf(browser(), id)
+  return split ? split.panes : [browser().items[id]].filter(Boolean)
+})
 
 // What each live page reports: title, address, progress, history.
 const pageState = state({})
@@ -35,6 +44,32 @@ const dropAt = state(null)
 const pages = createPages(web)
 // Visits go to the app's own agent, which keeps and searches them (app/Desktop/Agent.ts).
 const historyClient = createHistoryClient({ base: craft.app.url || '' })
+const libraryClient = createLibraryClient({ base: craft.app.url || '' })
+
+// A row being renamed in place.
+const renaming = state(null)
+const renameText = state('')
+
+// The Library: what left the sidebar, what was visited, what was downloaded.
+const LIBRARY_SECTIONS = [{ id: 'archive', title: 'Archive' }, { id: 'history', title: 'History' }, { id: 'downloads', title: 'Downloads' }]
+const library = state(null)
+const libraryText = state('')
+const archivedTabs = state([])
+const visitedPages = state([])
+const savedDownloads = state([])
+// Downloads running now, by id, as Craft reports them.
+const liveDownloads = state({})
+const downloadList = derived(() => {
+  const live = liveDownloads()
+  return [...Object.values(live), ...savedDownloads().filter(each => !live[each.id])]
+})
+const libraryGroups = derived(() => {
+  const section = library()
+  if (section === 'archive') return groupByDay(archivedTabs(), tab => tab.archivedAt)
+  if (section === 'history') return groupByDay(visitedPages(), page => page.lastVisitAt)
+  if (section === 'downloads') return groupByDay(downloadList(), download => download.startedAt)
+  return []
+})
 
 // The command bar: a new tab (cmd-T) or this tab's address (cmd-L).
 const commanding = state(null)
@@ -95,17 +130,23 @@ async function restore() {
 }
 
 effect(() => {
-  const tab = shownTab()
-  if (tab && tab.kind === 'tab' && tab.url) pages.show(tab, space().profile)
+  for (const tab of panes()) {
+    if (tab.kind === 'tab' && tab.url) pages.show(tab, space().profile)
+  }
 })
 
-function rowStyle(item) {
-  return item.id === shownId() ? { backgroundColor: palette().selected } : {}
+function rowStyle(row) {
+  const item = row.item ?? row
+  const showing = item.id === shownId() || (row.panes && row.panes.some(pane => pane.id === shownId()))
+  return showing ? { backgroundColor: palette().selected } : {}
 }
 function textStyle() { return { color: palette().foreground } }
 function iconFor(item) { return item.icon && item.icon.startsWith('http') ? item.icon : '' }
 function emojiFor(item) { return item.icon && !item.icon.startsWith('http') ? item.icon : '' }
-function titleOf(item) { return displayTitle(item.title, item.url) }
+function titleOf(item) { return item.name || displayTitle(item.title, item.url) }
+/** A split view's row reads as its tabs' titles side by side. */
+function rowTitle(row) { return row.panes ? row.panes.map(titleOf).join('  |  ') : titleOf(row.item) }
+function isSplitRow(row) { return Boolean(row.panes) }
 
 function newTab(url, background = false) {
   apply(openTab(browser(), { url, background }).state)
@@ -143,6 +184,11 @@ function pick(index) {
   if (!chosen || chosen.id === 'go') return submitCommand()
   if (chosen.kind === 'history') return go(chosen.url)
   commanding.set(null)
+  if (splitting && browser().items[splitting]) {
+    apply(splitTabs(browser(), splitting, chosen.id).state)
+    splitting = null
+    return
+  }
   show(chosen.id)
 }
 /** Opens an address: in this tab from cmd-L, in a new one from cmd-T. */
@@ -153,12 +199,92 @@ function go(url) {
     apply(updateItem(browser(), shownId(), { url }))
     web.navigate(shownId(), url)
   }
+  else if (splitting && browser().items[splitting]) {
+    const opened = openTab(browser(), { url, background: true })
+    apply(splitTabs(opened.state, splitting, opened.tab.id).state)
+    splitting = null
+  }
   else newTab(url)
 }
 function submitCommand() {
   const target = resolveInput(commandText(), 'google')
   if (!target) return commanding.set(null)
   go(target.url)
+}
+
+// Right-clicking a row: what it offers depends on the row and the tab on screen (menus.ts).
+async function openRowMenu(item) {
+  const chosen = await craft.desktop.contextMenu(rowMenu(browser(), item, shownId()))
+  const latest = chosen ? browser().items[item.id] : null
+  if (!latest) return
+  const { state: next, effect } = runRowAction(browser(), latest, chosen, shownId())
+  apply(next)
+  if (effect && effect.kind === 'copy') craft.clipboard && craft.clipboard.setString(effect.text)
+  if (effect && effect.kind === 'rename') startRename(effect.id)
+  if (effect && effect.kind === 'close') close(effect.id)
+}
+
+function startRename(id) {
+  const item = browser().items[id]
+  if (!item) return
+  renameText.set(item.kind === 'folder' ? item.title || '' : titleOf(item))
+  renaming.set(id)
+}
+function finishRename() {
+  const id = renaming()
+  if (!id) return
+  renaming.set(null)
+  const item = browser().items[id]
+  // Keeping the page's own title is not a rename.
+  if (item && (item.kind === 'folder' || renameText().trim() !== displayTitle(item.title, item.url))) apply(renameItem(browser(), id, renameText()))
+}
+
+/** cmd-shift-=: the tab on screen gets a new tab beside it, chosen from the command bar. */
+function splitWithNew() {
+  if (!shownId()) return openCommand('new')
+  splitting = shownId()
+  openCommand('new')
+}
+let splitting = null
+
+async function openLibrary(section) {
+  library.set(section)
+  libraryText.set('')
+  if (section === 'archive') archivedTabs.set(await libraryClient.archived())
+  if (section === 'history') visitedPages.set(await libraryClient.history())
+  if (section === 'downloads') savedDownloads.set(await libraryClient.downloads())
+}
+let libraryTimer = null
+function typeLibrary(event) {
+  const text = textOf(event)
+  libraryText.set(text)
+  clearTimeout(libraryTimer)
+  libraryTimer = setTimeout(async () => {
+    const found = await libraryClient.history(text)
+    if (library() === 'history' && libraryText() === text) visitedPages.set(found)
+  }, 80)
+}
+function openFromLibrary(entry) {
+  const section = library()
+  library.set(null)
+  if (section === 'archive') {
+    // The archived row comes back as it was, under its own id, so the agent un-archives it.
+    apply(openTab(browser(), { id: entry.id, url: entry.url, title: entry.title }).state)
+    archivedTabs.set(archivedTabs().filter(tab => tab.id !== entry.id))
+  }
+  else if (section === 'history') newTab(entry.url)
+  else if (section === 'downloads' && entry.state === 'finished') web.openDownload(entry.path).catch(() => {})
+}
+function downloadDetail(download) {
+  if (download.state === 'failed') return 'Failed'
+  if (download.state === 'finished') return formatBytes(download.total || download.received)
+  const fraction = downloadFraction(download)
+  return fraction === null ? formatBytes(download.received) : formatBytes(download.received) + ' of ' + formatBytes(download.total)
+}
+function entryTitle(entry) { return library() === 'downloads' ? entry.name || entry.url : entry.title || displayTitle('', entry.url) }
+function entryDetail(entry) {
+  if (library() === 'downloads') return downloadDetail(entry)
+  return displayHost(entry.url) + '  ·  ' + formatTime(library() === 'archive' ? entry.archivedAt : entry.lastVisitAt)
 }
 
 function drop(row, event) {
@@ -205,7 +331,15 @@ const commands = {
     apply(result.state)
     pages.release(result.archived.map(tab => tab.id))
   },
-  'escape': () => commanding() && commanding.set(null),
+  'split-view': () => splitWithNew(),
+  'library': () => openLibrary('archive'),
+  'downloads': () => openLibrary('downloads'),
+  'escape': () => {
+    if (renaming()) return renaming.set(null)
+    if (library()) return library.set(null)
+    splitting = null
+    if (commanding()) commanding.set(null)
+  },
 }
 
 onMount(() => {
@@ -234,6 +368,12 @@ onMount(() => {
     else newTab(event.url, event.background)
   })
   web.on('close', event => close(event.tab))
+  web.on('download', (event) => {
+    const next = applyDownload(liveDownloads()[event.id], event)
+    liveDownloads.set({ ...liveDownloads(), [event.id]: next })
+    // Progress stays in the window; the agent keeps where it started and how it ended.
+    if (event.state !== 'progress') libraryClient.recordDownload(next)
+  })
   // Pages left unseen go to sleep; their rows stay.
   setInterval(() => {
     const visible = new Set(shownId() ? [shownId()] : [])
@@ -259,7 +399,7 @@ onMount(() => {
     </Pressable>
 
     <View :if="favorites().length" class="flex-row gap-[8px] py-[4px]" @drop="dropOnFavorites($event)">
-      <Pressable :for="row in favorites()" :key="row.item.id" class="flex-1 items-center justify-center h-[44px] bg-white/30 hover:bg-white/50 rounded-[12px] duration-150 transition" :style="rowStyle(row.item)" draggable :drag-data="row.item.id" :drag-url="row.item.url" :testID="'favorite-' + row.item.id" @press="show(row.item.id)">
+      <Pressable :for="row in favorites()" :key="row.item.id" class="flex-1 items-center justify-center h-[44px] bg-white/30 hover:bg-white/50 rounded-[12px] duration-150 transition" :style="rowStyle(row.item)" draggable :drag-data="row.item.id" :drag-url="row.item.url" :testID="'favorite-' + row.item.id" @press="show(row.item.id)" @long-press="openRowMenu(row.item)">
         <Image :if="iconFor(row.item)" :src="iconFor(row.item)" class="h-[18px] w-[18px]" />
         <Icon :if="!iconFor(row.item)" name="globe" class="h-[18px] w-[18px]" />
       </Pressable>
@@ -274,12 +414,14 @@ onMount(() => {
     </View>
 
     <ScrollView class="flex-1">
-      <Pressable :for="row in pinned()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="{ ...rowStyle(row.item), paddingLeft: 10 + row.depth * 16 }" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :drop-inside="row.item.kind === 'folder'" :testID="'pinned-' + row.item.id" @press="row.item.kind === 'folder' ? apply(updateItem(browser(), row.item.id, { collapsed: !row.item.collapsed })) : show(row.item.id)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
+      <Pressable :for="row in pinned()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="{ ...rowStyle(row), paddingLeft: 10 + row.depth * 16 }" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :drop-inside="row.item.kind === 'folder'" :testID="'pinned-' + row.item.id" @press="row.item.kind === 'folder' ? apply(updateItem(browser(), row.item.id, { collapsed: !row.item.collapsed })) : show(row.item.id)" @long-press="openRowMenu(row.item)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
         <Icon :if="row.item.kind === 'folder'" :symbol="row.item.collapsed ? 'folder' : 'folder.fill'" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Image :if="row.item.kind !== 'folder' && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" />
-        <Text :if="row.item.kind !== 'folder' && !iconFor(row.item) && emojiFor(row.item)" class="w-[16px] text-[13px]">{{ emojiFor(row.item) }}</Text>
-        <Icon :if="row.item.kind !== 'folder' && !iconFor(row.item) && !emojiFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Text class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ titleOf(row.item) }}</Text>
+        <Icon :if="isSplitRow(row)" symbol="rectangle.split.2x1" class="h-[16px] w-[16px]" :style="textStyle()" />
+        <Image :if="row.item.kind === 'tab' && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" />
+        <Text :if="row.item.kind === 'tab' && !iconFor(row.item) && emojiFor(row.item)" class="w-[16px] text-[13px]">{{ emojiFor(row.item) }}</Text>
+        <Icon :if="row.item.kind === 'tab' && !iconFor(row.item) && !emojiFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
+        <Text :if="renaming() !== row.item.id" class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ rowTitle(row) }}</Text>
+        <TextInput :if="renaming() === row.item.id" class="flex-1 text-[13px]" :bordered="false" :value="renameText()" autofocus select-text-on-focus :testID="'rename-' + row.item.id" @input="renameText.set(textOf($event))" @submit="finishRename()" @blur="finishRename()" />
         <Button :if="hoveredRow() === row.item.id && row.item.kind === 'tab'" symbol="minus" variant="ghost" iconOnly class="text-[11px]" :testID="'unload-' + row.item.id" @click="close(row.item.id)" />
       </Pressable>
 
@@ -295,11 +437,13 @@ onMount(() => {
         <Text class="flex-1 text-[13px]" :style="{ color: palette().foreground, opacity: 0.75 }">New Tab</Text>
       </Pressable>
 
-      <Pressable :for="row in today()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] px-[10px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="rowStyle(row.item)" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :testID="'today-' + row.item.id" @press="show(row.item.id)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
-        <Image :if="iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" />
-        <Icon :if="!iconFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Text class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ titleOf(row.item) }}</Text>
-        <Button :if="hoveredRow() === row.item.id" symbol="xmark" variant="ghost" iconOnly class="text-[11px]" :testID="'close-' + row.item.id" @click="close(row.item.id)" />
+      <Pressable :for="row in today()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] px-[10px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="rowStyle(row)" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :testID="'today-' + row.item.id" @press="show(row.item.id)" @long-press="openRowMenu(row.item)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
+        <Icon :if="isSplitRow(row)" symbol="rectangle.split.2x1" class="h-[16px] w-[16px]" :style="textStyle()" />
+        <Image :if="!isSplitRow(row) && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" />
+        <Icon :if="!isSplitRow(row) && !iconFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
+        <Text :if="renaming() !== row.item.id" class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ rowTitle(row) }}</Text>
+        <TextInput :if="renaming() === row.item.id" class="flex-1 text-[13px]" :bordered="false" :value="renameText()" autofocus select-text-on-focus :testID="'rename-' + row.item.id" @input="renameText.set(textOf($event))" @submit="finishRename()" @blur="finishRename()" />
+        <Button :if="hoveredRow() === row.item.id && !isSplitRow(row)" symbol="xmark" variant="ghost" iconOnly class="text-[11px]" :testID="'close-' + row.item.id" @click="close(row.item.id)" />
       </Pressable>
     </ScrollView>
 
@@ -311,9 +455,20 @@ onMount(() => {
   </View>
 
   <View class="flex-1 pb-[8px] pr-[8px] pt-[8px]" :style="sidebarOpen() ? {} : { paddingLeft: 8 }">
-    <View class="overflow-hidden flex-1 bg-white rounded-[12px] shadow-lg">
+    <View :if="panes().length <= 1" class="overflow-hidden flex-1 bg-white rounded-[12px] shadow-lg">
       <WebView :tab="shownId()" class="flex-1" testID="content" />
       <View :if="progress() > 0" class="absolute left-0 top-0 h-[2px] bg-[#3b5bfd] duration-200 transition" :style="{ width: (progress() * 100) + '%' }"></View>
+    </View>
+    <View :if="panes().length > 1" class="flex-1 flex-row gap-[8px]">
+      <View :for="pane in panes()" :key="pane.id" class="overflow-hidden flex-1 bg-white rounded-[12px] shadow-lg" :style="pane.id === shownId() ? { borderWidth: 2, borderColor: '#3b5bfd' } : { borderWidth: 2, borderColor: '#00000000' }">
+        <Pressable class="flex-row gap-[6px] items-center px-[10px] h-[28px] bg-black/5" :testID="'pane-' + pane.id" @press="show(pane.id)">
+          <Image :if="iconFor(pane)" :src="iconFor(pane)" class="h-[14px] w-[14px]" />
+          <Text class="flex-1 text-[12px]" :style="{ color: '#3a3d5c' }" :numberOfLines="1">{{ titleOf(pane) }}</Text>
+          <Button symbol="xmark" variant="ghost" iconOnly class="text-[10px]" :testID="'leave-' + pane.id" @click="apply(leaveSplit(browser(), pane.id))" />
+        </Pressable>
+        <WebView :tab="pane.id" class="flex-1" :testID="'content-' + pane.id" />
+        <View :if="pane.id === shownId() && progress() > 0" class="absolute left-0 top-0 h-[2px] bg-[#3b5bfd] duration-200 transition" :style="{ width: (progress() * 100) + '%' }"></View>
+      </View>
     </View>
   </View>
 
@@ -327,6 +482,35 @@ onMount(() => {
         <Text class="flex-1 text-[14px]" :style="{ color: index === highlighted() ? '#ffffff' : '#1b1d3a' }" :numberOfLines="1">{{ result.title }}</Text>
         <Text :if="result.kind === 'tab' || result.kind === 'pinned'" class="text-[12px]" :style="{ color: index === highlighted() ? '#ffffffcc' : '#6b6e8f' }">Switch to Tab</Text>
       </Pressable>
+    </View>
+  </View>
+
+  <View :if="library()" class="absolute bottom-0 left-0 right-0 top-0 items-center justify-center bg-black/15" testID="library-backdrop">
+    <View class="overflow-hidden gap-[10px] p-[14px] h-[560px] w-[720px] bg-white/95 rounded-[16px] shadow-2xl" material="hud" testID="library">
+      <View class="flex-row gap-[6px] items-center">
+        <Pressable :for="section in LIBRARY_SECTIONS" :key="section.id" class="justify-center px-[12px] h-[30px] rounded-[8px]" :style="library() === section.id ? { backgroundColor: '#3b5bfd' } : { backgroundColor: '#0000000d' }" :testID="'library-' + section.id" @press="openLibrary(section.id)">
+          <Text class="font-semibold text-[13px]" :style="{ color: library() === section.id ? '#ffffff' : '#1b1d3a' }">{{ section.title }}</Text>
+        </Pressable>
+        <View class="flex-1"></View>
+        <Button :if="library() === 'downloads'" title="Clear" variant="ghost" testID="clear-downloads" @click="libraryClient.clearDownloads().then(() => openLibrary('downloads'))" />
+        <Button symbol="xmark" variant="ghost" iconOnly testID="close-library" @click="library.set(null)" />
+      </View>
+      <TextInput :if="library() === 'history'" class="px-[8px] h-[32px] text-[14px]" :value="libraryText()" autofocus placeholder="Search history" testID="library-search" @input="typeLibrary($event)" />
+      <ScrollView class="flex-1">
+        <Text :if="!libraryGroups().length" class="py-[40px] text-[13px] text-center" :style="{ color: '#6b6e8f' }">{{ library() === 'archive' ? 'Tabs you close or clear stay here for 30 days.' : library() === 'history' ? 'Pages you visit show up here.' : 'Files you download show up here.' }}</Text>
+        <View :for="group in libraryGroups()" :key="group.label" class="gap-[2px] pb-[10px]">
+          <Text class="px-[8px] py-[4px] font-semibold text-[11px]" :style="{ color: '#6b6e8f' }">{{ group.label }}</Text>
+          <Pressable :for="entry in group.entries" :key="entry.id || entry.url" class="flex-row gap-[10px] items-center px-[8px] h-[40px] hover:bg-black/5 rounded-[8px]" :testID="'entry-' + (entry.id || entry.url)" @press="openFromLibrary(entry)">
+            <Icon :symbol="library() === 'downloads' ? 'arrow.down.circle' : library() === 'archive' ? 'archivebox' : 'clock'" class="h-[16px] w-[16px]" :style="{ color: '#3a3d5c' }" />
+            <View class="flex-1">
+              <Text class="text-[13px]" :style="{ color: '#1b1d3a' }" :numberOfLines="1">{{ entryTitle(entry) }}</Text>
+              <Text class="text-[11px]" :style="{ color: '#6b6e8f' }" :numberOfLines="1">{{ entryDetail(entry) }}</Text>
+            </View>
+            <Button :if="library() === 'downloads' && entry.path" symbol="magnifyingglass" variant="ghost" iconOnly :testID="'reveal-' + entry.id" @click="web.revealDownload(entry.path).catch(() => {})" />
+            <Button :if="library() === 'history'" symbol="trash" variant="ghost" iconOnly :testID="'forget-' + entry.url" @click="libraryClient.forgetPage(entry.url).then(() => visitedPages.set(visitedPages().filter(page => page.url !== entry.url)))" />
+          </Pressable>
+        </View>
+      </ScrollView>
     </View>
   </View>
 </View>
