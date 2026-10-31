@@ -4,6 +4,9 @@ import { join } from 'node:path'
 import { response, route } from '@stacksjs/router'
 import desktop from '../../config/desktop'
 import { openBrowserDatabase } from './database'
+import { createDownloads } from './downloads'
+import type { Downloads } from './downloads'
+import { downloadsApi } from './downloads-api'
 import { createHistory } from './history'
 import type { History } from './history'
 import { historyApi } from './history-api'
@@ -26,7 +29,9 @@ const dataDir = process.env.STACKS_DESKTOP_DATA_DIR || join(homedir(), 'Library'
 let db: Database | undefined
 let history: History | undefined
 let session: Session | undefined
+let downloads: Downloads | undefined
 const database = () => (db ??= openBrowserDatabase(join(dataDir, 'Browser.sqlite')))
+const downloadRoutes = downloadsApi(() => (downloads ??= createDownloads(database())))
 const historyRoutes = historyApi(() => (history ??= createHistory(database())))
 const sessionRoutes = sessionApi(() => {
   if (!session) {
@@ -45,3 +50,7 @@ route.post('/api/history', request => historyRoutes.record(request)).skipCsrf()
 route.delete('/api/history', request => historyRoutes.forget(request)).skipCsrf()
 route.get('/api/session', () => sessionRoutes.load())
 route.put('/api/session', request => sessionRoutes.save(request)).skipCsrf()
+route.get('/api/session/archive', request => sessionRoutes.archived(request))
+route.get('/api/downloads', request => downloadRoutes.list(request))
+route.post('/api/downloads', request => downloadRoutes.record(request)).skipCsrf()
+route.delete('/api/downloads', () => downloadRoutes.clear()).skipCsrf()
