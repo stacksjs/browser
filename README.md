@@ -42,21 +42,48 @@ takes `--test-dir <dir>`: it records the real AppKit view tree in `state.json` a
 
 | Path | What it holds |
 |---|---|
-| `config/desktop.ts` | The Mac app: name, bundle id, WebKit, default-browser registration, permissions |
-| `resources/native/Main.stx` | The main window: sidebar, content card, command bar |
-| `resources/functions/browser/sidebar.ts` | Spaces, Favorites, Pinned tabs and folders, Today; every change returns a new state |
+| `config/desktop.ts` | The Mac app: name, bundle id, WebKit, default-browser registration, permissions, Dock menu, its three screens |
+| `resources/native/Main.stx` | The main window: sidebar, content (one page or a split view), command bar, Library, site controls, find, downloads, Peek, Boosts, onboarding |
+| `resources/native/Little.stx` | The small floating window links from other apps open in; Open in Browser hands the live page to the main window |
+| `resources/native/Settings.stx` | Settings (cmd-,), kept in `craft.storage` and posted to open windows |
+| `resources/functions/browser/sidebar.ts` | Spaces, Favorites, Pinned tabs and folders, Today, split views of up to four tabs; every change returns a new state |
+| `resources/functions/browser/menus.ts` | What right-clicking a row or a space offers, and what each choice does (profiles included) |
+| `resources/functions/browser/theme.ts` | A space's light and dark palettes from one to three colours, with readable text |
 | `resources/functions/browser/order.ts` | Sort keys, so a drag rewrites one row |
 | `resources/functions/browser/pages.ts` | Which tabs have a live page: created on first show, released when they sleep |
 | `resources/functions/browser/hibernation.ts` | When an unseen tab gives its page up |
-| `resources/functions/browser/rank.ts` | Command-bar results: match quality plus frecency |
+| `resources/functions/browser/rank.ts`, `actions.ts`, `suggestions.ts` | Command-bar results: tabs, history, actions and search suggestions, by match quality and frecency |
 | `resources/functions/browser/keymap.ts` | Arc's keyboard shortcuts, as menus |
-| `resources/functions/browser/arc-import.ts` | Spaces, pinned tabs, folders and favorites from Arc's `StorableSidebar.json` |
-| `resources/functions/browser/history-client.ts` | Turns finished page loads into visits, sent to the agent a second at a time |
-| `resources/functions/browser/session.ts` | What changed in the sidebar since the last save (a comparison of references), sent to the agent in one request |
-| `app/Desktop/Agent.ts` | Routes only the desktop app serves: `/api/history`, `/api/session` |
+| `resources/functions/browser/library.ts` | The Library's archive, history and downloads, grouped by day |
+| `resources/functions/browser/sites.ts` | Per-site settings: the blocker, zoom, camera and microphone answers |
+| `resources/functions/browser/blocker.ts` | very-good-adblock's lists and page scripts handed to WebKit, compiled only when they change |
+| `resources/functions/browser/boosts.ts` | A site's own CSS, JS and zapped elements |
+| `resources/functions/browser/peek.ts` | Which links open over the page instead of as a tab |
+| `resources/functions/browser/settings.ts` | The browser's settings and their defaults |
+| `resources/functions/browser/arc-import.ts`, `onboarding.ts` | Arc's sidebar as this browser's, merged into what is there, and the first-launch steps |
+| `resources/functions/browser/history-client.ts`, `session.ts` | Visits and sidebar changes sent to the agent in batches, and flushed on quit |
+| `app/Desktop/Agent.ts` | Routes only the desktop app serves: history, session, archive, downloads, sites, boosts, suggestions, blocker, Arc import |
 | `app/Desktop/database.ts` | Opens `~/Library/Application Support/Browser/Browser.sqlite` with every model, so one schema covers the file |
-| `app/Desktop/history.ts` | History: one row per page, a trigram search index, frecency |
-| `app/Desktop/session.ts` | The sidebar: spaces, rows, the active space and recently closed tabs; rows that leave it stay archived for 30 days |
-| `app/Models/` | `HistoryEntry`, `Space`, `SidebarItem`, `SessionValue`: the tables, migrated from the models when the app opens |
+| `app/Desktop/*.ts` | One store and its API per table, plus `arc.ts` (reads copies of Arc's files) and `suggest.ts` (the search engine's suggestions) |
+| `app/Models/` | `HistoryEntry`, `Space`, `SidebarItem`, `SessionValue`, `Download`, `SiteSetting`, `Boost` |
 
 The Arc importer only ever reads a copy of Arc's files; it never writes them.
+
+## Performance
+
+`tests/perf/budgets.test.ts` holds the code to the plan's budgets. Measured on an Apple Silicon Mac
+(Oct 31, 2026), medians:
+
+| What | Budget | Measured |
+|---|---|---|
+| Draw a 500-row sidebar (both sections and the tab order) | < 8 ms | 0.22 ms |
+| Reorder a row and work out what to save | < 8 ms | 0.05 ms |
+| Rank 5,000 tabs and pages for the command bar | < 10 ms | 2.5 ms |
+| Search 20,000 history pages (first results) | < 50 ms | 2.6 ms |
+| Launch to the sidebar drawn | < 250 ms | about 1.8 s |
+| Host and agent memory, idle | < 120 MB | about 525 MB and 187 MB |
+
+The last two miss, and neither is the app's code: almost all of the launch time and the host's
+memory go to zig-js loading the screen bundle (a one-screen bundle takes 0.7 s and 205 MB), and
+about 360 KB of every bundle is stx's whole web page runtime, which a native screen mostly does
+not use. Both are being fixed where they live, in zig-js and in stx's native compiler.
