@@ -1,10 +1,15 @@
+import type { Database } from 'bun:sqlite'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { response, route } from '@stacksjs/router'
 import desktop from '../../config/desktop'
+import { openBrowserDatabase } from './database'
+import { createHistory } from './history'
 import type { History } from './history'
-import { openHistory } from './history'
 import { historyApi } from './history-api'
+import { createSession } from './session'
+import type { Session } from './session'
+import { sessionApi } from './session-api'
 
 /**
  * Routes only the desktop app serves. They run inside the app, on 127.0.0.1,
@@ -17,13 +22,26 @@ import { historyApi } from './history-api'
 /** `~/Library/Application Support/<App>`, where the agent keeps its port and lock too. */
 const dataDir = process.env.STACKS_DESKTOP_DATA_DIR || join(homedir(), 'Library', 'Application Support', desktop.macos!.appName)
 
-let store: History | undefined
-const history = historyApi(() => (store ??= openHistory(join(dataDir, 'Browser.sqlite'))))
+// One database for everything the app keeps, opened on the first request.
+let db: Database | undefined
+let history: History | undefined
+let session: Session | undefined
+const database = () => (db ??= openBrowserDatabase(join(dataDir, 'Browser.sqlite')))
+const historyRoutes = historyApi(() => (history ??= createHistory(database())))
+const sessionRoutes = sessionApi(() => {
+  if (!session) {
+    session = createSession(database())
+    session.prune()
+  }
+  return session
+})
 
 route.get('/api/desktop/status', () => response.json({ app: 'Browser', ok: true }))
 
 // The agent only answers its own window (session cookie and Host check), which
 // is stronger than a CSRF token, so these writes skip it.
-route.get('/api/history', request => history.search(request))
-route.post('/api/history', request => history.record(request)).skipCsrf()
-route.delete('/api/history', request => history.forget(request)).skipCsrf()
+route.get('/api/history', request => historyRoutes.search(request))
+route.post('/api/history', request => historyRoutes.record(request)).skipCsrf()
+route.delete('/api/history', request => historyRoutes.forget(request)).skipCsrf()
+route.get('/api/session', () => sessionRoutes.load())
+route.put('/api/session', request => sessionRoutes.save(request)).skipCsrf()

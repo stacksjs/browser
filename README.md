@@ -52,8 +52,11 @@ takes `--test-dir <dir>`: it records the real AppKit view tree in `state.json` a
 | `resources/functions/browser/keymap.ts` | Arc's keyboard shortcuts, as menus |
 | `resources/functions/browser/arc-import.ts` | Spaces, pinned tabs, folders and favorites from Arc's `StorableSidebar.json` |
 | `resources/functions/browser/history-client.ts` | Turns finished page loads into visits, sent to the agent a second at a time |
-| `app/Desktop/Agent.ts` | Routes only the desktop app serves: `/api/history` |
-| `app/Desktop/history.ts` | History in `~/Library/Application Support/Browser/Browser.sqlite`: one row per page, a trigram search index, frecency |
-| `app/Models/HistoryEntry.ts` | The history table, migrated from the model when the app opens |
+| `resources/functions/browser/session.ts` | What changed in the sidebar since the last save (a comparison of references), sent to the agent in one request |
+| `app/Desktop/Agent.ts` | Routes only the desktop app serves: `/api/history`, `/api/session` |
+| `app/Desktop/database.ts` | Opens `~/Library/Application Support/Browser/Browser.sqlite` with every model, so one schema covers the file |
+| `app/Desktop/history.ts` | History: one row per page, a trigram search index, frecency |
+| `app/Desktop/session.ts` | The sidebar: spaces, rows, the active space and recently closed tabs; rows that leave it stay archived for 30 days |
+| `app/Models/` | `HistoryEntry`, `Space`, `SidebarItem`, `SessionValue`: the tables, migrated from the models when the app opens |
 
 The Arc importer only ever reads a copy of Arc's files; it never writes them.

@@ -3,23 +3,25 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { releaseOrm } from '@stacksjs/query-builder'
+import type { Database } from 'bun:sqlite'
+import { openBrowserDatabase } from '../../../app/Desktop/database'
 import type { History } from '../../../app/Desktop/history'
-import { openHistory } from '../../../app/Desktop/history'
+import { createHistory } from '../../../app/Desktop/history'
 import { historyApi } from '../../../app/Desktop/history-api'
 
 const DAY = 86_400_000
 const NOW = 1_800_000_000_000
-const open: History[] = []
+const open: Database[] = []
 const dirs: string[] = []
 
 function history(path = ':memory:'): History {
-  const store = openHistory(path)
-  open.push(store)
-  return store
+  const db = openBrowserDatabase(path)
+  open.push(db)
+  return createHistory(db)
 }
 
 afterEach(() => {
-  for (const store of open.splice(0)) store.close()
+  for (const db of open.splice(0)) db.close()
   releaseOrm()
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
@@ -89,9 +91,9 @@ describe('history', () => {
     const dir = mkdtempSync(join(tmpdir(), 'browser-history-'))
     dirs.push(dir)
     const path = join(dir, 'Browser.sqlite')
-    const first = openHistory(path)
-    first.record([{ url: 'https://kept.example/', title: 'Kept page', at: NOW }])
-    first.close()
+    const db = openBrowserDatabase(path)
+    createHistory(db).record([{ url: 'https://kept.example/', title: 'Kept page', at: NOW }])
+    db.close()
     releaseOrm()
     expect(history(path).search('kept', 8, NOW)[0]?.title).toBe('Kept page')
   })

@@ -5,11 +5,15 @@ import { createHistoryClient } from '../functions/browser/history-client'
 import { browserMenus } from '../functions/browser/keymap'
 import { createPages } from '../functions/browser/pages'
 import { rank } from '../functions/browser/rank'
+import { createSessionClient } from '../functions/browser/session'
 import { addFavorite, clearToday, closeTab, createState, moveItem, openTab, pinTab, reopenClosed, rows, selectTab, switchSpace, tabOrder, unpinTab, updateItem } from '../functions/browser/sidebar'
 
 const web = craft.web
-const saved = craft.storage.getSync('browser.sidebar')
-const browser = state(saved && saved.spaces ? saved : createState({ name: 'Personal' }))
+// The sidebar lives in the agent's database (app/Desktop/Agent.ts); it draws once that answers.
+const sessionClient = createSessionClient({ base: craft.app.url || '' })
+const browser = state(createState({ name: 'Personal' }))
+const restored = state(false)
+let persisting = false
 const scheme = state(craft.appearance.colorScheme())
 craft.appearance.onChange(next => scheme.set(next))
 
@@ -61,12 +65,33 @@ effect(() => {
   }, 50)
 })
 
-let saveTimer = null
 function apply(next) {
   if (next === browser()) return
   browser.set(next)
-  clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => craft.storage.setSync('browser.sidebar', browser()), 400)
+  if (persisting) sessionClient.save(next)
+}
+
+/**
+ * The saved sidebar, else the one an older build kept in UserDefaults (moved
+ * into the database once it is safely there), else a fresh one. If the agent
+ * cannot answer, nothing is written: a partial sidebar must never replace the
+ * saved one.
+ */
+async function restore() {
+  let saved = null
+  try {
+    saved = await sessionClient.load()
+    persisting = true
+  }
+  catch (error) { console.error('Browser: the sidebar could not be loaded; changes this run are not kept.', error) }
+  const legacy = saved ? null : craft.storage.getSync('browser.sidebar')
+  browser.set(saved ?? (legacy && legacy.spaces ? legacy : browser()))
+  restored.set(true)
+  if (persisting && !saved) {
+    sessionClient.save(browser())
+    if (await sessionClient.flush() && legacy) craft.storage.remove('browser.sidebar')
+  }
+  if (!Object.keys(browser().items).length) newTab('https://stacksjs.com')
 }
 
 effect(() => {
@@ -214,12 +239,12 @@ onMount(() => {
     const sleepy = tabsToSleep(pages.activity(browser(), visible, busy), Date.now())
     if (sleepy.length) pages.release(sleepy)
   }, 60_000)
-  if (!Object.keys(browser().items).length) newTab('https://stacksjs.com')
+  restore()
 })
 </script>
 
 <View class="flex-1 flex-row" :style="{ gradientDirection: 'to-b', gradientFrom: palette().background, gradientTo: palette().backgroundTo || palette().background }">
-  <View :if="sidebarOpen()" class="gap-[6px] pb-[10px] pl-[10px] pr-[4px] w-[248px]">
+  <View :if="sidebarOpen() && restored()" class="gap-[6px] pb-[10px] pl-[10px] pr-[4px] w-[248px]">
     <View class="flex-row gap-[2px] items-center justify-end pr-[2px] h-[44px]">
       <Button symbol="sidebar.left" variant="toolbar" iconOnly testID="toggle-sidebar" @click="commands['toggle-sidebar']()" />
       <Button symbol="arrow.left" variant="toolbar" iconOnly :disabled="!shownPage()?.canGoBack" testID="back" @click="commands.back()" />

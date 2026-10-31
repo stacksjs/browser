@@ -1,6 +1,4 @@
 import type { Database } from 'bun:sqlite'
-import { openNativeDatabase } from '@stacksjs/orm/native'
-import HistoryEntry from '../Models/HistoryEntry'
 import { displayHost } from '../../resources/functions/browser/address'
 import { frecency } from '../../resources/functions/browser/rank'
 
@@ -18,7 +16,6 @@ export interface History {
   recent: (limit?: number) => HistoryResult[]
   forget: (url: string) => void
   clear: () => void
-  close: () => void
 }
 
 interface Row { id: number, url: string, title: string, visits: number, recent_visits: string, last_visit_at: number }
@@ -61,9 +58,8 @@ function ftsQuery(words: string[]): string {
   return words.map(word => `"${word.replaceAll('"', '""')}"`).join(' AND ')
 }
 
-export function openHistory(path: string): History {
-  const db = openNativeDatabase({ path, models: { HistoryEntry: HistoryEntry as never } })
-  if (path !== ':memory:') db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;')
+/** History over the app's database (`openBrowserDatabase`). */
+export function createHistory(db: Database): History {
   ensureSearchIndex(db)
 
   const find = db.query<Row, [string]>('SELECT * FROM history_entries WHERE url = ?')
@@ -128,6 +124,5 @@ export function openHistory(path: string): History {
     recent: (limit = 50) => latest.all(limit).map(row => result(row, Date.now())),
     forget: (url) => { db.query('DELETE FROM history_entries WHERE url = ?').run(url) },
     clear: () => { db.exec('DELETE FROM history_entries') },
-    close: () => db.close(),
   }
 }
