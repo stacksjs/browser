@@ -29,6 +29,6 @@ export default {
       { title: 'New Private Window', action: 'new-private-window' },
     ],
     nativeScreens: ['Main'],
-    window: { width: 1280, height: 820, minWidth: 900, minHeight: 560, titlebarStyle: 'transparent' },
+    window: { width: 1280, height: 820, minWidth: 900, minHeight: 560, titlebarStyle: 'transparent', trafficLights: [18, 15] },
   },
 } satisfies DesktopConfig

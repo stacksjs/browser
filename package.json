@@ -59,11 +59,11 @@
     "build:desktop": "./buddy build:desktop"
   },
   "dependencies": {
-    "@stacksjs/stx": "^0.2.774",
-    "stacks": "^0.75.397",
-    "@stacksjs/env": "^0.75.397",
-    "@stacksjs/path": "^0.75.397",
-    "@stacksjs/actions": "^0.75.397"
+    "@stacksjs/stx": "0.2.775",
+    "stacks": "^0.75.398",
+    "@stacksjs/env": "^0.75.398",
+    "@stacksjs/path": "^0.75.398",
+    "@stacksjs/actions": "^0.75.398"
   },
   "workspaces": [
     "storage/framework",
@@ -79,8 +79,8 @@
     "commit-msg": "bun x gitlint --edit \"$1\""
   },
   "devDependencies": {
-    "@stacksjs/components": "0.2.769",
+    "@stacksjs/components": "0.2.775",
     "better-dx": "^0.2.37",
-    "bun-plugin-stx": "^0.2.774"
+    "bun-plugin-stx": "0.2.775"
   }
 }
