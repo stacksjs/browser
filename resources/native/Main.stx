@@ -1,0 +1,281 @@
+<script client>
+import { displayHost, displayTitle, resolveInput } from '../functions/browser/address'
+import { tabsToSleep } from '../functions/browser/hibernation'
+import { browserMenus } from '../functions/browser/keymap'
+import { createPages } from '../functions/browser/pages'
+import { rank } from '../functions/browser/rank'
+import { addFavorite, clearToday, closeTab, createState, moveItem, openTab, pinTab, reopenClosed, rows, selectTab, switchSpace, tabOrder, unpinTab, updateItem } from '../functions/browser/sidebar'
+
+const web = craft.web
+const saved = craft.storage.getSync('browser.sidebar')
+const browser = state(saved && saved.spaces ? saved : createState({ name: 'Personal' }))
+const scheme = state(craft.appearance.colorScheme())
+craft.appearance.onChange(next => scheme.set(next))
+
+const space = derived(() => browser().spaces.find(each => each.id === browser().activeSpace) ?? browser().spaces[0])
+const palette = derived(() => space().theme[scheme()])
+const favorites = derived(() => rows(browser(), 'favorites'))
+const pinned = derived(() => rows(browser(), 'pinned'))
+const today = derived(() => rows(browser(), 'today'))
+const shownId = derived(() => browser().selected[browser().activeSpace] ?? null)
+const shownTab = derived(() => (shownId() ? browser().items[shownId()] : null))
+
+// What each live page reports: title, address, progress, history.
+const pageState = state({})
+const shownPage = derived(() => (shownId() ? pageState()[shownId()] ?? null : null))
+const progress = derived(() => (shownPage()?.loading ? Math.max(0.08, shownPage().progress) : 0))
+const sidebarOpen = state(true)
+const hoveredRow = state(null)
+const dropAt = state(null)
+const pages = createPages(web)
+
+// The command bar: a new tab (cmd-T) or this tab's address (cmd-L).
+const commanding = state(null)
+const commandText = state('')
+const highlighted = state(0)
+const results = derived(() => {
+  if (!commanding()) return []
+  const text = commandText().trim()
+  const target = resolveInput(text, 'google')
+  const lead = target ? [{ kind: target.kind === 'url' ? 'action' : 'suggestion', id: 'go', title: target.kind === 'url' ? target.url : 'Search Google for “' + text + '”', url: target.url, symbol: target.kind === 'url' ? 'globe' : 'magnifyingglass' }] : []
+  if (!text) return lead
+  const tabs = Object.values(browser().items).filter(item => item.kind === 'tab' && item.url)
+    .map(item => ({ kind: item.section === 'today' ? 'tab' : 'pinned', id: item.id, title: titleOf(item), url: item.url, icon: iconFor(item) }))
+  return [...lead, ...rank(text, tabs, 7).map(result => ({ ...result, symbol: 'square.on.square' }))]
+})
+
+let saveTimer = null
+function apply(next) {
+  if (next === browser()) return
+  browser.set(next)
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => craft.storage.setSync('browser.sidebar', browser()), 400)
+}
+
+effect(() => {
+  const tab = shownTab()
+  if (tab && tab.kind === 'tab' && tab.url) pages.show(tab, space().profile)
+})
+
+function rowStyle(item) {
+  return item.id === shownId() ? { backgroundColor: palette().selected } : {}
+}
+function textStyle() { return { color: palette().foreground } }
+function iconFor(item) { return item.icon && item.icon.startsWith('http') ? item.icon : '' }
+function emojiFor(item) { return item.icon && !item.icon.startsWith('http') ? item.icon : '' }
+function titleOf(item) { return displayTitle(item.title, item.url) }
+
+function newTab(url, background = false) {
+  apply(openTab(browser(), { url, background }).state)
+}
+function show(id) { apply(selectTab(browser(), id)) }
+function close(id) {
+  const result = closeTab(browser(), id)
+  apply(result.state)
+  if (result.removed) pages.release([id])
+}
+function textOf(event) {
+  if (typeof event === 'string') return event
+  const value = event?.nativeEvent?.text ?? event?.text ?? event?.value
+  return typeof value === 'string' ? value : ''
+}
+
+function openCommand(mode) {
+  commandText.set(mode === 'address' && shownTab() ? shownTab().url : '')
+  highlighted.set(0)
+  commanding.set(mode)
+}
+function typeCommand(event) {
+  commandText.set(textOf(event))
+  highlighted.set(0)
+}
+function steer(event) {
+  const count = results().length
+  if (!count) return
+  const step = event.key === 'ArrowUp' || (event.key === 'Tab' && event.shiftKey) ? -1 : 1
+  highlighted.set((highlighted() + step + count) % count)
+}
+function pick(index) {
+  const chosen = results()[index]
+  if (!chosen || chosen.id === 'go') return submitCommand()
+  commanding.set(null)
+  show(chosen.id)
+}
+function submitCommand() {
+  const target = resolveInput(commandText(), 'google')
+  const mode = commanding()
+  commanding.set(null)
+  if (!target) return
+  if (mode === 'address' && shownId()) {
+    apply(updateItem(browser(), shownId(), { url: target.url }))
+    web.navigate(shownId(), target.url)
+  }
+  else newTab(target.url)
+}
+
+function drop(row, event) {
+  dropAt.set(null)
+  const id = event.data
+  if (typeof id === 'string' && id !== row.item.id) {
+    const place = event.position === 'inside' ? { inside: row.item.id } : event.position === 'before' ? { before: row.item.id } : { after: row.item.id }
+    apply(moveItem(browser(), id, place))
+  }
+  else if (event.urls && event.urls[0]) newTab(event.urls[0])
+}
+function dropOnFavorites(event) {
+  if (typeof event.data === 'string') apply(addFavorite(browser(), event.data))
+}
+
+function cycle(step) {
+  const order = tabOrder(browser())
+  if (!order.length) return
+  const index = order.findIndex(tab => tab.id === shownId())
+  show(order[(index + step + order.length) % order.length].id)
+}
+
+const commands = {
+  'new-tab': () => openCommand('new'),
+  'open-location': () => openCommand('address'),
+  'close-tab': () => shownId() && close(shownId()),
+  'reopen-closed': () => apply(reopenClosed(browser()).state),
+  'toggle-sidebar': () => sidebarOpen.set(!sidebarOpen()),
+  'pin-tab': () => shownTab() && apply(shownTab().section === 'today' ? pinTab(browser(), shownId()) : unpinTab(browser(), shownId())),
+  'copy-url': () => shownTab() && craft.clipboard && craft.clipboard.setString(shownTab().url),
+  'reload': () => shownId() && web.reload(shownId()),
+  'hard-reload': () => shownId() && web.reload(shownId(), { ignoreCache: true }),
+  'back': () => shownId() && web.back(shownId()),
+  'forward': () => shownId() && web.forward(shownId()),
+  'zoom-in': () => shownPage() && web.setZoom(shownId(), Math.min(3, (shownPage().zoom || 1) + 0.1)),
+  'zoom-out': () => shownPage() && web.setZoom(shownId(), Math.max(0.3, (shownPage().zoom || 1) - 0.1)),
+  'zoom-reset': () => shownId() && web.setZoom(shownId(), 1),
+  'next-tab': () => cycle(1),
+  'previous-tab': () => cycle(-1),
+  'next-space': () => apply(switchSpace(browser(), 'next')),
+  'previous-space': () => apply(switchSpace(browser(), 'previous')),
+  'clear-today': () => {
+    const result = clearToday(browser())
+    apply(result.state)
+    pages.release(result.archived.map(tab => tab.id))
+  },
+  'escape': () => commanding() && commanding.set(null),
+}
+
+onMount(() => {
+  craft.desktop.setMenus(browserMenus())
+  craft.desktop.onCommand((id) => {
+    if (commands[id]) return commands[id]()
+    const space = /^space-(\d)$/.exec(id)
+    if (space && browser().spaces[Number(space[1]) - 1]) apply(switchSpace(browser(), browser().spaces[Number(space[1]) - 1].id))
+    const favorite = /^favorite-(\d)$/.exec(id)
+    if (favorite && favorites()[Number(favorite[1]) - 1]) show(favorites()[Number(favorite[1]) - 1].item.id)
+  })
+  web.on('state', (event) => {
+    pageState.set({ ...pageState(), [event.tab]: event })
+    const item = browser().items[event.tab]
+    if (item && (event.title || event.url)) apply(updateItem(browser(), event.tab, { ...(event.title ? { title: event.title } : {}), ...(event.url ? { url: event.url } : {}) }))
+  })
+  web.on('favicon', event => apply(updateItem(browser(), event.tab, { icon: event.url })))
+  web.on('open', (event) => {
+    if (event.child) {
+      apply(openTab(browser(), { url: event.url, id: event.child }).state)
+      pages.adopt(event.child)
+    }
+    else newTab(event.url, event.background)
+  })
+  web.on('close', event => close(event.tab))
+  // Pages left unseen go to sleep; their rows stay.
+  setInterval(() => {
+    const visible = new Set(shownId() ? [shownId()] : [])
+    const busy = new Set(Object.values(pageState()).filter(page => page.camera || page.microphone).map(page => page.tab))
+    const sleepy = tabsToSleep(pages.activity(browser(), visible, busy), Date.now())
+    if (sleepy.length) pages.release(sleepy)
+  }, 60_000)
+  if (!Object.keys(browser().items).length) newTab('https://stacksjs.com')
+})
+</script>
+
+<View class="flex-1 flex-row" :style="{ gradientDirection: 'to-b', gradientFrom: palette().background, gradientTo: palette().backgroundTo || palette().background }">
+  <View :if="sidebarOpen()" class="gap-[6px] pb-[10px] pl-[10px] pr-[4px] w-[248px]">
+    <View class="flex-row gap-[2px] items-center justify-end pr-[2px] h-[44px]">
+      <Button symbol="sidebar.left" variant="toolbar" iconOnly testID="toggle-sidebar" @click="commands['toggle-sidebar']()" />
+      <Button symbol="arrow.left" variant="toolbar" iconOnly :disabled="!shownPage()?.canGoBack" testID="back" @click="commands.back()" />
+      <Button symbol="arrow.right" variant="toolbar" iconOnly :disabled="!shownPage()?.canGoForward" testID="forward" @click="commands.forward()" />
+      <Button symbol="arrow.clockwise" variant="toolbar" iconOnly testID="reload" @click="commands.reload()" />
+    </View>
+
+    <Pressable class="flex-row items-center px-[12px] h-[34px] bg-white/45 hover:bg-white/60 rounded-[10px] duration-150 transition" testID="address" @press="openCommand('address')">
+      <Text class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ shownTab() ? displayHost(shownTab().url) : 'Search or enter address' }}</Text>
+    </Pressable>
+
+    <View :if="favorites().length" class="flex-row gap-[8px] py-[4px]" @drop="dropOnFavorites($event)">
+      <Pressable :for="row in favorites()" :key="row.item.id" class="flex-1 items-center justify-center h-[44px] bg-white/30 hover:bg-white/50 rounded-[12px] duration-150 transition" :style="rowStyle(row.item)" draggable :drag-data="row.item.id" :drag-url="row.item.url" :testID="'favorite-' + row.item.id" @press="show(row.item.id)">
+        <Image :if="iconFor(row.item)" :src="iconFor(row.item)" class="h-[18px] w-[18px]" />
+        <Icon :if="!iconFor(row.item)" name="globe" class="h-[18px] w-[18px]" />
+      </Pressable>
+    </View>
+    <View :if="!favorites().length" class="items-center justify-center h-[64px] bg-white/15 border border-white/60 rounded-[12px]" @drop="dropOnFavorites($event)">
+      <Text class="font-semibold text-[12px]" :style="textStyle()">Drag to add Favorites</Text>
+    </View>
+
+    <View class="flex-row gap-[8px] items-center pt-[6px] px-[8px] h-[30px]">
+      <Text class="font-semibold text-[13px]" :style="textStyle()">{{ space().icon || '✦' }}</Text>
+      <Text class="flex-1 font-semibold text-[13px]" :style="textStyle()" :numberOfLines="1">{{ space().name }}</Text>
+    </View>
+
+    <ScrollView class="flex-1">
+      <Pressable :for="row in pinned()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="{ ...rowStyle(row.item), paddingLeft: 10 + row.depth * 16 }" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :drop-inside="row.item.kind === 'folder'" :testID="'pinned-' + row.item.id" @press="row.item.kind === 'folder' ? apply(updateItem(browser(), row.item.id, { collapsed: !row.item.collapsed })) : show(row.item.id)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
+        <Icon :if="row.item.kind === 'folder'" :symbol="row.item.collapsed ? 'folder' : 'folder.fill'" class="h-[16px] w-[16px]" :style="textStyle()" />
+        <Image :if="row.item.kind !== 'folder' && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" />
+        <Text :if="row.item.kind !== 'folder' && !iconFor(row.item) && emojiFor(row.item)" class="w-[16px] text-[13px]">{{ emojiFor(row.item) }}</Text>
+        <Icon :if="row.item.kind !== 'folder' && !iconFor(row.item) && !emojiFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
+        <Text class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ titleOf(row.item) }}</Text>
+        <Button :if="hoveredRow() === row.item.id && row.item.kind === 'tab'" symbol="minus" variant="ghost" iconOnly class="text-[11px]" :testID="'unload-' + row.item.id" @click="close(row.item.id)" />
+      </Pressable>
+
+      <View class="flex-row gap-[8px] items-center my-[4px] px-[10px] h-[22px]">
+        <View class="flex-1 h-[1px] bg-black/10"></View>
+        <Pressable :if="today().length" class="justify-center px-[6px] h-[18px] hover:bg-white/40 rounded-[6px]" testID="clear-today" @press="commands['clear-today']()">
+          <Text class="font-semibold text-[11px]" :style="{ color: palette().foreground, opacity: 0.6 }">Clear</Text>
+        </Pressable>
+      </View>
+
+      <Pressable class="flex-row gap-[8px] items-center px-[10px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" testID="new-tab" @press="openCommand('new')">
+        <Icon name="plus" class="h-[16px] w-[16px]" :style="textStyle()" />
+        <Text class="flex-1 text-[13px]" :style="{ color: palette().foreground, opacity: 0.75 }">New Tab</Text>
+      </Pressable>
+
+      <Pressable :for="row in today()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] px-[10px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="rowStyle(row.item)" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :testID="'today-' + row.item.id" @press="show(row.item.id)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
+        <Image :if="iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" />
+        <Icon :if="!iconFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
+        <Text class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ titleOf(row.item) }}</Text>
+        <Button :if="hoveredRow() === row.item.id" symbol="xmark" variant="ghost" iconOnly class="text-[11px]" :testID="'close-' + row.item.id" @click="close(row.item.id)" />
+      </Pressable>
+    </ScrollView>
+
+    <View class="flex-row gap-[10px] items-center justify-center h-[32px]">
+      <Pressable :for="each in browser().spaces" :key="each.id" class="items-center justify-center h-[22px] w-[22px] hover:bg-white/40 rounded-full" :style="each.id === space().id ? { backgroundColor: palette().selected } : {}" :testID="'space-' + each.id" @press="apply(switchSpace(browser(), each.id))">
+        <Text class="text-[11px]" :style="textStyle()">{{ each.icon || '●' }}</Text>
+      </Pressable>
+    </View>
+  </View>
+
+  <View class="flex-1 pb-[8px] pr-[8px] pt-[8px]" :style="sidebarOpen() ? {} : { paddingLeft: 8 }">
+    <View class="overflow-hidden flex-1 bg-white rounded-[12px] shadow-lg">
+      <WebView :tab="shownId()" class="flex-1" testID="content" />
+      <View :if="progress() > 0" class="absolute left-0 top-0 h-[2px] bg-[#3b5bfd] duration-200 transition" :style="{ width: (progress() * 100) + '%' }"></View>
+    </View>
+  </View>
+
+  <View :if="commanding()" class="absolute bottom-0 left-0 right-0 top-0 items-center pt-[120px] bg-black/10" testID="command-backdrop">
+    <View class="overflow-hidden gap-[8px] p-[10px] w-[620px] bg-white/90 rounded-[16px] shadow-2xl" material="hud">
+      <TextInput class="px-[8px] h-[40px] text-[18px]" :bordered="false" :value="commandText()" autofocus select-text-on-focus placeholder="Search or enter address" testID="command" @input="typeCommand($event)" @keydown="steer($event)" @submit="pick(highlighted())" />
+      <View :if="results().length" class="h-[1px] bg-black/10"></View>
+      <Pressable :for="(result, index) in results()" :key="result.kind + result.id" class="flex-row gap-[10px] items-center px-[10px] h-[40px] rounded-[10px]" :style="index === highlighted() ? { backgroundColor: '#3b5bfd' } : {}" :testID="'result-' + index" @press="pick(index)">
+        <Image :if="result.icon" :src="result.icon" class="h-[16px] w-[16px]" />
+        <Icon :if="!result.icon" :symbol="result.symbol" class="h-[16px] w-[16px]" :style="{ color: index === highlighted() ? '#ffffff' : '#3a3d5c' }" />
+        <Text class="flex-1 text-[14px]" :style="{ color: index === highlighted() ? '#ffffff' : '#1b1d3a' }" :numberOfLines="1">{{ result.title }}</Text>
+        <Text :if="result.kind === 'tab' || result.kind === 'pinned'" class="text-[12px]" :style="{ color: index === highlighted() ? '#ffffffcc' : '#6b6e8f' }">Switch to Tab</Text>
+      </Pressable>
+    </View>
+  </View>
+</View>
