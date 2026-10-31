@@ -28,7 +28,7 @@ export default {
       { title: 'New Tab', action: 'new-tab' },
       { title: 'New Private Window', action: 'new-private-window' },
     ],
-    nativeScreens: ['Main'],
+    nativeScreens: ['Main', 'Little', 'Settings'],
     window: { width: 1280, height: 820, minWidth: 900, minHeight: 560, titlebarStyle: 'transparent', trafficLights: [18, 15] },
   },
 } satisfies DesktopConfig

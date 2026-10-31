@@ -3,6 +3,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { response, route } from '@stacksjs/router'
 import desktop from '../../config/desktop'
+import { boostsApi, createBoosts } from './boosts'
+import type { Boosts } from './boosts'
 import { openBrowserDatabase } from './database'
 import { createDownloads } from './downloads'
 import type { Downloads } from './downloads'
@@ -13,6 +15,8 @@ import { historyApi } from './history-api'
 import { createSession } from './session'
 import type { Session } from './session'
 import { sessionApi } from './session-api'
+import { createSites, sitesApi } from './sites'
+import type { Sites } from './sites'
 import { createSuggestions, suggestApi } from './suggest'
 
 /**
@@ -31,8 +35,12 @@ let db: Database | undefined
 let history: History | undefined
 let session: Session | undefined
 let downloads: Downloads | undefined
+let sites: Sites | undefined
+let boosts: Boosts | undefined
 const database = () => (db ??= openBrowserDatabase(join(dataDir, 'Browser.sqlite')))
 const suggestRoutes = suggestApi(createSuggestions())
+const siteRoutes = sitesApi(() => (sites ??= createSites(database())))
+const boostRoutes = boostsApi(() => (boosts ??= createBoosts(database())))
 const downloadRoutes = downloadsApi(() => (downloads ??= createDownloads(database())))
 const historyRoutes = historyApi(() => (history ??= createHistory(database())))
 const sessionRoutes = sessionApi(() => {
@@ -54,6 +62,11 @@ route.get('/api/session', () => sessionRoutes.load())
 route.put('/api/session', request => sessionRoutes.save(request)).skipCsrf()
 route.get('/api/session/archive', request => sessionRoutes.archived(request))
 route.get('/api/suggest', request => suggestRoutes.get(request))
+route.get('/api/sites', () => siteRoutes.all())
+route.put('/api/sites', request => siteRoutes.save(request)).skipCsrf()
+route.get('/api/boosts', () => boostRoutes.all())
+route.put('/api/boosts', request => boostRoutes.save(request)).skipCsrf()
+route.delete('/api/boosts', request => boostRoutes.remove(request)).skipCsrf()
 route.get('/api/downloads', request => downloadRoutes.list(request))
 route.post('/api/downloads', request => downloadRoutes.record(request)).skipCsrf()
 route.delete('/api/downloads', () => downloadRoutes.clear()).skipCsrf()

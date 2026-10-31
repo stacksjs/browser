@@ -1,0 +1,67 @@
+<script client>
+import { displayHost, displayTitle, resolveInput } from '../functions/browser/address'
+import { createPages } from '../functions/browser/pages'
+import { readSettings } from '../functions/browser/settings'
+
+// A link from another app, in a small window that floats above the rest (Arc's
+// Little Arc). "Open in Browser" hands the live page to the main window.
+const web = craft.web
+const pages = createPages(web)
+const tabId = 'little-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+const started = (craft.route && craft.route.params && craft.route.params.url) || ''
+const page = state({ url: started, title: '', progress: 0, loading: Boolean(started), canGoBack: false })
+const typed = state('')
+const opened = state(Boolean(started))
+const settings = readSettings(key => craft.storage.getSync(key))
+let handing = false
+
+function open(url) {
+  opened.set(true)
+  page.set({ ...page(), url })
+  pages.show({ id: tabId, kind: 'tab', url, section: 'today', space: null, parent: null, order: 'a', createdAt: Date.now(), lastActiveAt: Date.now() }, 'default')
+}
+function submit() {
+  const target = resolveInput(typed(), settings.searchEngine)
+  if (target) open(target.url)
+}
+
+/** The page moves to the main window as a Today tab; this window closes once that window has it. */
+function openInBrowser() {
+  if (!opened() || handing) return
+  handing = true
+  craft.desktop.post({ type: 'adopt', tab: tabId, url: page().url, title: page().title })
+  // Closing takes the window's tabs with it, so wait for the main window to say it has this one.
+  setTimeout(() => craft.desktop.closeWindow(), 1500)
+}
+
+onMount(() => {
+  if (started) open(started)
+  web.on('state', (event) => {
+    if (event.tab === tabId) page.set({ url: event.url || page().url, title: event.title || '', progress: event.progress || 0, loading: Boolean(event.loading), canGoBack: Boolean(event.canGoBack) })
+  })
+  craft.desktop.onMessage((message) => {
+    if (message && message.type === 'adopted' && message.tab === tabId) craft.desktop.closeWindow()
+  })
+  craft.desktop.onCommand((id) => {
+    if (id === 'escape' || id === 'close-tab') craft.desktop.closeWindow()
+    if (id === 'reload') web.reload(tabId)
+    if (id === 'copy-url' && page().url) craft.clipboard && craft.clipboard.setString(page().url)
+  })
+})
+</script>
+
+<View class="flex-1 bg-[#eef0f6] dark:bg-[#1f2026]">
+  <View class="flex-row gap-[6px] items-center pl-[78px] pr-[8px] h-[38px]">
+    <Button symbol="arrow.left" variant="toolbar" iconOnly :disabled="!page().canGoBack" testID="little-back" @click="web.back(tabId)" />
+    <Text class="flex-1 font-semibold text-[#3a3d5c] text-[12px] dark:text-[#d7d9ea]" :numberOfLines="1">{{ opened() ? displayTitle(page().title, page().url) + '  ·  ' + displayHost(page().url) : 'Little Window' }}</Text>
+    <Button symbol="link" variant="toolbar" iconOnly testID="little-copy" @click="craft.clipboard && craft.clipboard.setString(page().url)" />
+    <Button title="Open in Browser" variant="secondary" :disabled="!opened()" testID="little-open" @click="openInBrowser()" />
+  </View>
+  <View class="overflow-hidden flex-1 mb-[6px] mx-[6px] bg-white rounded-[10px] shadow-md">
+    <View :if="!opened()" class="flex-1 items-center justify-center p-[24px]">
+      <TextInput class="px-[10px] h-[36px] w-[420px] text-[15px]" :value="typed()" autofocus placeholder="Search or enter address" testID="little-address" @input="typed.set(typeof $event === 'string' ? $event : ($event.nativeEvent && $event.nativeEvent.text) || $event.text || '')" @submit="submit()" />
+    </View>
+    <WebView :if="opened()" :tab="tabId" class="flex-1" testID="little-content" />
+    <View :if="page().loading && page().progress > 0" class="absolute left-0 top-0 h-[2px] bg-[#3b5bfd]" :style="{ width: (Math.max(0.08, page().progress) * 100) + '%' }"></View>
+  </View>
+</View>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { rowMenu, runRowAction } from '../../../resources/functions/browser/menus'
 import type { BrowserState } from '../../../resources/functions/browser/sidebar'
-import { addFavorite, createFolder, createState, moveItem, openTab, pinTab, renameItem, rows, splitOf, splitTabs, ungroupFolder, updateItem } from '../../../resources/functions/browser/sidebar'
+import { addFavorite, createFolder, createSpace, createState, moveItem, openTab, pinTab, renameItem, rows, splitOf, splitTabs, ungroupFolder, updateItem } from '../../../resources/functions/browser/sidebar'
 
 function sample(): BrowserState {
   let state = createState({ id: 's' })
@@ -92,5 +92,35 @@ describe('space menus', () => {
     const gone = runSpaceAction(state, 's', 'delete-space')
     expect(gone.state.spaces.map(space => space.id)).toEqual([second])
     expect(gone.effect).toEqual({ kind: 'released', tabs: ['a', 'b', 'c'] })
+  })
+})
+
+describe('profiles', () => {
+  it('give a space its own cookies, and its pages reload under them', async () => {
+    const { profiles, profileName, runSpaceAction, spaceMenu } = await import('../../../resources/functions/browser/menus')
+    let state = createSpace(sample(), { id: 'w', name: 'Work Stuff' }).state
+    expect(spaceMenu(state, 'w').map(entry => entry.id)).toContain('own-profile')
+    const own = runSpaceAction(state, 'w', 'own-profile')
+    state = own.state
+    expect(state.spaces.find(space => space.id === 'w')!.profile).toBe('work-stuff')
+    expect(profiles(state)).toEqual(['default', 'work-stuff'])
+    expect(profileName('work-stuff')).toBe('Work Stuff')
+    const back = runSpaceAction(state, 's', 'profile:work-stuff')
+    expect(back.state.spaces.find(space => space.id === 's')!.profile).toBe('work-stuff')
+    expect(back.effect).toEqual({ kind: 'released', tabs: ['a', 'b', 'c'] })
+  })
+})
+
+describe('settings', () => {
+  it('read what was stored, and the default for anything missing or wrong', async () => {
+    const { archiveAfterMs, DEFAULT_SETTINGS, readSettings, writeSettings } = await import('../../../resources/functions/browser/settings')
+    const store = new Map<string, unknown>()
+    expect(readSettings(key => store.get(key))).toEqual(DEFAULT_SETTINGS)
+    writeSettings((key, value) => store.set(key, value), { ...DEFAULT_SETTINGS, searchEngine: 'kagi', archiveAfter: '7d' })
+    expect(readSettings(key => store.get(key))).toMatchObject({ searchEngine: 'kagi', archiveAfter: '7d' })
+    store.set('browser.settings', { searchEngine: 'altavista', blocking: 'yes', archiveAfter: '1y' })
+    expect(readSettings(key => store.get(key))).toEqual(DEFAULT_SETTINGS)
+    expect(archiveAfterMs('12h')).toBe(43_200_000)
+    expect(archiveAfterMs('never')).toBeNull()
   })
 })

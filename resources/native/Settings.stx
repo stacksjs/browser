@@ -1,0 +1,76 @@
+<script client>
+import { ARCHIVE_CHOICES, ENGINE_CHOICES, readSettings, writeSettings } from '../functions/browser/settings'
+
+// The browser's settings. Written to craft.storage, then posted so the open
+// windows pick them up at once.
+const settings = state(readSettings(key => craft.storage.getSync(key)))
+const isDefault = state(null)
+const cleared = state('')
+
+function change(field, value) {
+  const next = { ...settings(), [field]: value }
+  settings.set(next)
+  writeSettings((key, data) => craft.storage.setSync(key, data), next)
+  craft.desktop.post({ type: 'settings' })
+}
+function pick(event) { return event && typeof event === 'object' && 'value' in event ? event.value : event }
+
+async function makeDefault() {
+  isDefault.set(await craft.desktop.setDefaultBrowser().catch(() => false))
+}
+async function clearHistory() {
+  await fetch((craft.app.url || '') + '/api/history', { method: 'DELETE' }).catch(() => null)
+  cleared.set('History cleared.')
+}
+
+onMount(async () => {
+  isDefault.set(await craft.desktop.isDefaultBrowser().catch(() => false))
+  craft.desktop.onCommand((id) => { if (id === 'escape' || id === 'close-tab') craft.desktop.closeWindow() })
+})
+</script>
+
+<ScrollView class="flex-1 bg-[#f4f5f9] dark:bg-[#1f2026]">
+  <View class="gap-[18px] pb-[28px] pt-[48px] px-[28px]">
+    <Text class="font-bold text-[#1b1d3a] text-[22px] dark:text-[#eef0ff]">Settings</Text>
+
+    <View class="gap-[12px] p-[16px] bg-white dark:bg-[#2a2b33] rounded-[12px]">
+      <Text class="font-semibold text-[#6b6e8f] text-[13px]">Browsing</Text>
+      <View class="flex-row items-center">
+        <Text class="flex-1 text-[#1b1d3a] text-[14px] dark:text-[#eef0ff]">Search engine</Text>
+        <Picker :value="settings().searchEngine" :options="ENGINE_CHOICES" testID="setting-engine" @change="change('searchEngine', pick($event))" />
+      </View>
+      <View class="flex-row items-center">
+        <Text class="flex-1 text-[#1b1d3a] text-[14px] dark:text-[#eef0ff]">Archive Today's tabs</Text>
+        <Picker :value="settings().archiveAfter" :options="ARCHIVE_CHOICES" testID="setting-archive" @change="change('archiveAfter', pick($event))" />
+      </View>
+      <View class="flex-row items-center">
+        <Text class="flex-1 text-[#1b1d3a] text-[14px] dark:text-[#eef0ff]">Open links from other apps in a small window</Text>
+        <Switch :value="settings().littleWindowForLinks" testID="setting-little" @change="change('littleWindowForLinks', !settings().littleWindowForLinks)" />
+      </View>
+    </View>
+
+    <View class="gap-[12px] p-[16px] bg-white dark:bg-[#2a2b33] rounded-[12px]">
+      <Text class="font-semibold text-[#6b6e8f] text-[13px]">Privacy</Text>
+      <View class="flex-row items-center">
+        <Text class="flex-1 text-[#1b1d3a] text-[14px] dark:text-[#eef0ff]">Block ads and trackers (very-good-adblock)</Text>
+        <Switch :value="settings().blocking" testID="setting-blocking" @change="change('blocking', !settings().blocking)" />
+      </View>
+      <View class="flex-row items-center">
+        <Text class="flex-1 text-[#1b1d3a] text-[14px] dark:text-[#eef0ff]">Hide cookie banners</Text>
+        <Switch :value="settings().cookieConsent" testID="setting-consent" @change="change('cookieConsent', !settings().cookieConsent)" />
+      </View>
+      <View class="flex-row gap-[10px] items-center">
+        <Button title="Clear History" variant="secondary" testID="setting-clear-history" @click="clearHistory()" />
+        <Text :if="cleared()" class="text-[#6b6e8f] text-[12px]">{{ cleared() }}</Text>
+      </View>
+    </View>
+
+    <View class="gap-[12px] p-[16px] bg-white dark:bg-[#2a2b33] rounded-[12px]">
+      <Text class="font-semibold text-[#6b6e8f] text-[13px]">Default browser</Text>
+      <View class="flex-row items-center">
+        <Text class="flex-1 text-[#1b1d3a] text-[14px] dark:text-[#eef0ff]">{{ isDefault() ? 'Browser opens your links.' : 'Another browser opens your links.' }}</Text>
+        <Button :if="isDefault() === false" title="Make Default" variant="primary" testID="setting-default" @click="makeDefault()" />
+      </View>
+    </View>
+  </View>
+</ScrollView>

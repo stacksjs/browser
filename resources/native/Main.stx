@@ -6,13 +6,16 @@ import { createHistoryClient } from '../functions/browser/history-client'
 import { browserMenus } from '../functions/browser/keymap'
 import { applyDownload, createLibraryClient, downloadFraction, formatBytes, formatTime, groupByDay } from '../functions/browser/library'
 import { createBlocker } from '../functions/browser/blocker'
+import { boostScripts, createBoostClient, newBoost, ZAP_SCRIPT, zapReadScript } from '../functions/browser/boosts'
 import { addSpace, rowMenu, runRowAction, runSpaceAction, spaceMenu } from '../functions/browser/menus'
 import { createPages } from '../functions/browser/pages'
+import { shouldPeek } from '../functions/browser/peek'
 import { rank } from '../functions/browser/rank'
 import { createSessionClient } from '../functions/browser/session'
+import { archiveAfterMs, readSettings } from '../functions/browser/settings'
 import { createSitesClient, decide, permissionWords, remember, settingsFor, siteKey, stepZoom, unblockedHosts } from '../functions/browser/sites'
 import { createSuggestionClient } from '../functions/browser/suggestions'
-import { addFavorite, clearToday, closeTab, createState, leaveSplit, moveItem, openTab, pinTab, renameItem, reopenClosed, rows, selectTab, splitOf, splitTabs, switchSpace, tabOrder, unpinTab, updateItem, updateSpace } from '../functions/browser/sidebar'
+import { addFavorite, autoArchive, clearToday, closeTab, createState, newId, leaveSplit, moveItem, openTab, pinTab, renameItem, reopenClosed, rows, selectTab, splitOf, splitTabs, switchSpace, tabOrder, unpinTab, updateItem, updateSpace } from '../functions/browser/sidebar'
 
 const web = craft.web
 // A private window keeps nothing: no saved sidebar, no history, pages in a store that never touches disk.
@@ -53,7 +56,7 @@ const sidebarOpen = state(craft.storage.getSync('browser.sidebarOpen') !== false
 const peeking = state(false)
 const sidebarShown = derived(() => sidebarOpen() || peeking())
 let peekTimer = null
-function peek(hovered) {
+function peekSidebar(hovered) {
   clearTimeout(peekTimer)
   if (hovered) return peeking.set(true)
   peekTimer = setTimeout(() => peeking.set(false), 250)
@@ -81,6 +84,14 @@ const findFound = state(true)
 // The downloads popover over the sidebar's footer.
 const downloadsOpen = state(false)
 const activeDownloads = derived(() => downloadList().filter(download => download.state === 'started').length)
+// Peek: a link out of a pinned tab or favorite, over the page.
+const peek = state(null)
+// Boosts: each site's own CSS, JS and zapped elements.
+const boostClient = createBoostClient({ base: craft.app.url || '' })
+const boosts = state([])
+const shownBoost = derived(() => (shownSite() ? boosts().find(boost => boost.host === shownSite().host) ?? null : null))
+const boostEditor = state(false)
+const zapping = state(false)
 const libraryClient = createLibraryClient({ base: craft.app.url || '' })
 
 // A row being renamed in place.
@@ -114,7 +125,8 @@ const commandText = state('')
 const highlighted = state(0)
 const historyMatches = state([])
 const suggestionMatches = state([])
-const searchEngine = state(craft.storage.getSync('browser.searchEngine') || 'google')
+const settings = state(readSettings(key => craft.storage.getSync(key)))
+const searchEngine = derived(() => settings().searchEngine)
 const suggestClient = createSuggestionClient({ base: craft.app.url || '' })
 const RESULT_SYMBOLS = { tab: 'square.on.square', pinned: 'pin', history: 'clock', suggestion: 'magnifyingglass' }
 const ENGINE_NAMES = { google: 'Google', duckduckgo: 'DuckDuckGo', kagi: 'Kagi', bing: 'Bing', ecosia: 'Ecosia', brave: 'Brave' }
@@ -367,6 +379,107 @@ function showAllDownloads() {
   openLibrary('downloads')
 }
 
+/** A link another app opened (this browser being the default): a small window above the rest, or a Today tab. */
+function openExternal(url) {
+  if (isPrivate || typeof url !== 'string' || !url) return
+  if (settings().littleWindowForLinks) return openLittle(url)
+  newTab(url)
+}
+function openLittle(url) {
+  craft.desktop.openWindow({ name: 'little-' + Date.now().toString(36), route: 'Little', title: 'Little Window', titlebarStyle: 'transparent', floating: true, width: 780, height: 580, minWidth: 420, minHeight: 320, trafficLights: [14, 13], params: url ? { url } : {} })
+}
+function openSettings() {
+  craft.desktop.openWindow({ name: 'settings', route: 'Settings', title: 'Settings', titlebarStyle: 'transparent', width: 620, height: 640, minWidth: 520, minHeight: 480, trafficLights: [16, 16] })
+}
+/** Another window says something: the Little window hands over its page, or settings changed. */
+function onWindowMessage(message) {
+  if (!message || typeof message !== 'object' || isPrivate) return
+  if (message.type === 'adopt' && typeof message.tab === 'string') {
+    apply(openTab(browser(), { id: message.tab, url: message.url || 'about:blank', title: message.title || undefined }).state)
+    pages.adopt(message.tab)
+    // Once this window shows it, the tab is this window's, and the small one may close.
+    setTimeout(() => craft.desktop.post({ type: 'adopted', tab: message.tab }), 200)
+  }
+  if (message.type === 'settings') applySettings(readSettings(key => craft.storage.getSync(key)))
+}
+function applySettings(next) {
+  const before = settings()
+  settings.set(next)
+  if (before.blocking !== next.blocking || before.cookieConsent !== next.cookieConsent)
+    blocker.setEnabled(next.blocking, { cookieConsent: next.cookieConsent }).catch(() => {})
+}
+
+/** A link from a pinned tab or favorite to another site opens in Peek instead of a new tab. */
+function openPeek(url, child) {
+  const tab = child || newId()
+  if (peek()) pages.release([peek().tab])
+  pages.adopt(tab)
+  if (!child) web.create({ id: tab, url, profile: space().profile, private: isPrivate })
+  peek.set({ tab, url, title: '' })
+}
+function closePeek() {
+  if (!peek()) return
+  pages.release([peek().tab])
+  peek.set(null)
+}
+function keepPeek() {
+  const opened = peek()
+  if (!opened) return
+  peek.set(null)
+  apply(openTab(browser(), { id: opened.tab, url: opened.url, title: opened.title || undefined }).state)
+}
+
+function saveBoost(boost) {
+  boosts.set([...boosts().filter(each => each.id !== boost.id), boost])
+  boostClient.save(boost)
+  blocker.setBoosts(boostScripts(boosts())).catch(() => {})
+  // The page gets the new CSS now; scripts run from its next load.
+  if (shownId()) {
+    const css = boost.enabled ? [boost.css, boost.zapped.length ? boost.zapped.join(',') + ' { display: none !important; }' : ''].join('\n') : ''
+    web.evaluate(shownId(), '(() => { let s = document.getElementById("craft-boost-live"); if (!s) { s = document.createElement("style"); s.id = "craft-boost-live"; (document.head || document.documentElement).appendChild(s) } s.textContent = ' + JSON.stringify(css) + ' })()', { isolated: true }).catch(() => {})
+  }
+}
+function openBoost() {
+  const site = shownSite()
+  if (!site) return
+  siteControls.set(false)
+  if (!shownBoost()) saveBoost(newBoost(site.host, newId()))
+  boostEditor.set(true)
+}
+function editBoost(field, value) {
+  const boost = shownBoost()
+  if (boost) saveBoost({ ...boost, [field]: value })
+}
+async function deleteBoost() {
+  const boost = shownBoost()
+  if (!boost) return
+  boostEditor.set(false)
+  boosts.set(boosts().filter(each => each.id !== boost.id))
+  await boostClient.remove(boost.id)
+  blocker.setBoosts(boostScripts(boosts())).catch(() => {})
+  if (shownId()) web.reload(shownId())
+}
+let zapTimer = null
+async function toggleZap() {
+  if (!shownId()) return
+  if (zapping()) return stopZap()
+  zapping.set(true)
+  await web.evaluate(shownId(), ZAP_SCRIPT, { isolated: true }).catch(() => zapping.set(false))
+  zapTimer = setInterval(() => collectZapped(false), 500)
+}
+async function collectZapped(stop) {
+  if (!shownId()) return
+  const raw = await web.evaluate(shownId(), zapReadScript(stop), { isolated: true }).catch(() => '[]')
+  const picked = JSON.parse(typeof raw === 'string' ? raw : '[]')
+  const boost = shownBoost()
+  if (boost && picked.length) saveBoost({ ...boost, zapped: [...new Set([...boost.zapped, ...picked])] })
+}
+function stopZap() {
+  clearInterval(zapTimer)
+  zapping.set(false)
+  collectZapped(true)
+}
+
 function openPrivateWindow() {
   craft.desktop.openWindow({ name: 'private-' + Date.now().toString(36), route: 'Main', title: 'Private', titlebarStyle: 'transparent', width: 1180, height: 780, minWidth: 900, minHeight: 560, trafficLights: [18, 15], params: { private: true } })
 }
@@ -486,6 +599,8 @@ const commands = {
   'find-previous': () => (finding() ? findNext(true) : openFind()),
   'site-controls': () => shownSite() && siteControls.set(!siteControls()),
   'new-private-window': () => openPrivateWindow(),
+  'little-arc': () => openLittle(''),
+  'settings': () => openSettings(),
   'next-tab': () => cycle(1),
   'previous-tab': () => cycle(-1),
   'next-space': () => apply(switchSpace(browser(), 'next')),
@@ -503,6 +618,9 @@ const commands = {
   'downloads': () => downloadsOpen.set(!downloadsOpen()),
   'escape': () => {
     if (permissionShown()) return answerPermission(false)
+    if (zapping()) return stopZap()
+    if (boostEditor()) return boostEditor.set(false)
+    if (peek()) return closePeek()
     if (siteControls()) return siteControls.set(false)
     if (downloadsOpen()) return downloadsOpen.set(false)
     if (finding()) return finding.set(false)
@@ -519,6 +637,14 @@ onMount(() => {
   // Sidebar changes and visits wait a moment to be sent together; quitting sends them now.
   if (!isPrivate) craft.desktop.onQuit?.(() => Promise.all([sessionClient.flush(), historyClient.flush()]))
   web.on('permission', onPermission)
+  craft.desktop.onMessage(onWindowMessage)
+  if (!isPrivate) {
+    craft.desktop.onOpenURL(urls => urls.forEach(openExternal))
+    craft.desktop.takeOpenedURLs().then(urls => urls.forEach(openExternal)).catch(() => {})
+  }
+  web.on('state', (event) => {
+    if (peek() && event.tab === peek().tab) peek.set({ ...peek(), url: event.url || peek().url, title: event.title || peek().title })
+  })
   craft.desktop.onCommand((id) => {
     if (commands[id]) return commands[id]()
     const space = /^space-(\d)$/.exec(id)
@@ -537,6 +663,7 @@ onMount(() => {
   })
   web.on('favicon', event => apply(updateItem(browser(), event.tab, { icon: event.url })))
   web.on('open', (event) => {
+    if (shouldPeek(browser(), event.tab, event.url)) return openPeek(event.url, event.child)
     if (event.child) {
       apply(openTab(browser(), { url: event.url, id: event.child }).state)
       pages.adopt(event.child)
@@ -550,6 +677,15 @@ onMount(() => {
     // Progress stays in the window; the agent keeps where it started and how it ended.
     if (event.state !== 'progress') libraryClient.recordDownload(next)
   })
+  // Today's tabs left alone longer than the setting go to the archive.
+  setInterval(() => {
+    const idle = archiveAfterMs(settings().archiveAfter)
+    if (!idle || isPrivate) return
+    const result = autoArchive(browser(), Date.now(), idle)
+    if (!result.archived.length) return
+    apply(result.state)
+    pages.release(result.archived.map(tab => tab.id))
+  }, 5 * 60_000)
   // Pages left unseen go to sleep; their rows stay.
   setInterval(() => {
     const visible = new Set(shownId() ? [shownId()] : [])
@@ -559,17 +695,19 @@ onMount(() => {
   }, 60_000)
   restore()
   // Settings before the blocker, so allowed sites are allowed from the first page.
-  sitesClient.all().then(async (all) => {
+  Promise.all([sitesClient.all(), boostClient.all()]).then(async ([all, saved]) => {
     sites.set(all)
+    boosts.set(saved)
+    await blocker.setBoosts(boostScripts(saved))
     await blocker.allow(unblockedHosts(all))
-    await blocker.sync()
+    if (settings().blocking) await blocker.sync({ cookieConsent: settings().cookieConsent })
   }).catch(error => console.error('Browser: the ad blocker could not start.', error))
 })
 </script>
 
 <View class="flex-1 flex-row" :style="{ gradientDirection: 'to-b', gradientFrom: palette().background, gradientTo: palette().backgroundTo || palette().background }">
-  <View :if="!sidebarOpen() && !peeking()" class="absolute bottom-0 left-0 top-0 w-[10px]" testID="sidebar-edge" @hover-change="peek($event.hovered)"></View>
-  <View :if="sidebarShown() && restored()" class="gap-[6px] pb-[10px] pl-[10px] pr-[4px] w-[248px]" :style="sidebarOpen() ? {} : { position: 'absolute', left: 0, top: 0, bottom: 0, zIndex: 20, borderRadius: 12, shadowColor: '#000000', shadowOpacity: 0.25, shadowRadius: 18, gradientDirection: 'to-b', gradientFrom: palette().background, gradientTo: palette().backgroundTo || palette().background }" testID="sidebar" @hover-change="sidebarOpen() || peek($event.hovered)">
+  <View :if="!sidebarOpen() && !peeking()" class="absolute bottom-0 left-0 top-0 w-[10px]" testID="sidebar-edge" @hover-change="peekSidebar($event.hovered)"></View>
+  <View :if="sidebarShown() && restored()" class="gap-[6px] pb-[10px] pl-[10px] pr-[4px] w-[248px]" :style="sidebarOpen() ? {} : { position: 'absolute', left: 0, top: 0, bottom: 0, zIndex: 20, borderRadius: 12, shadowColor: '#000000', shadowOpacity: 0.25, shadowRadius: 18, gradientDirection: 'to-b', gradientFrom: palette().background, gradientTo: palette().backgroundTo || palette().background }" testID="sidebar" @hover-change="sidebarOpen() || peekSidebar($event.hovered)">
     <View class="flex-row gap-[2px] items-center justify-end pr-[2px] h-[44px]">
       <Button symbol="sidebar.left" variant="toolbar" iconOnly :style="textStyle()" testID="toggle-sidebar" @click="commands['toggle-sidebar']()" />
       <Button symbol="arrow.left" variant="toolbar" iconOnly :style="textStyle()" :disabled="!shownPage()?.canGoBack" testID="back" @click="commands.back()" />
@@ -714,6 +852,38 @@ onMount(() => {
     </View>
     <View class="h-[1px] bg-black/10"></View>
     <Button title="Clear Cookies and Site Data" variant="ghost" testID="site-clear" @click="clearSiteData()" />
+    <Button :title="shownBoost() ? 'Edit Boost' : 'Boost This Site'" variant="secondary" testID="site-boost" @click="openBoost()" />
+  </View>
+
+  <View :if="boostEditor() && shownBoost()" class="absolute bottom-[20px] right-[20px] top-[20px] z-30 gap-[10px] p-[14px] w-[360px] bg-white/95 rounded-[14px] shadow-2xl" material="hud" testID="boost-editor">
+    <View class="flex-row gap-[8px] items-center">
+      <Icon symbol="paintbrush" class="h-[16px] w-[16px]" :style="{ color: '#3b5bfd' }" />
+      <Text class="flex-1 font-semibold text-[14px]" :style="{ color: '#1b1d3a' }" :numberOfLines="1">{{ shownBoost().name }}</Text>
+      <Switch :value="shownBoost().enabled" testID="boost-enabled" @change="editBoost('enabled', !shownBoost().enabled)" />
+      <Button symbol="xmark" variant="ghost" iconOnly testID="close-boost" @click="boostEditor.set(false)" />
+    </View>
+    <Button :title="zapping() ? 'Done Zapping' : 'Zap Elements'" :variant="zapping() ? 'primary' : 'secondary'" testID="boost-zap" @click="toggleZap()" />
+    <Text class="text-[12px]" :style="{ color: '#6b6e8f' }">{{ zapping() ? 'Click anything on the page to hide it for good. Escape stops.' : shownBoost().zapped.length + ' zapped ' + (shownBoost().zapped.length === 1 ? 'element' : 'elements') }}</Text>
+    <Text class="font-semibold text-[12px]" :style="{ color: '#6b6e8f' }">CSS</Text>
+    <TextInput multiline class="flex-1 p-[8px] text-[12px]" :value="shownBoost().css" placeholder="body { font-family: Georgia }" testID="boost-css" @input="editBoost('css', textOf($event))" />
+    <Text class="font-semibold text-[12px]" :style="{ color: '#6b6e8f' }">JavaScript (runs from the next load)</Text>
+    <TextInput multiline class="p-[8px] h-[120px] text-[12px]" :value="shownBoost().js" placeholder="document.title = 'Boosted'" testID="boost-js" @input="editBoost('js', textOf($event))" />
+    <View class="flex-row gap-[8px]">
+      <Button :if="shownBoost().zapped.length" title="Bring Back Zapped" variant="ghost" testID="boost-unzap" @click="editBoost('zapped', [])" />
+      <View class="flex-1"></View>
+      <Button title="Delete Boost" variant="ghost" testID="boost-delete" @click="deleteBoost()" />
+    </View>
+  </View>
+
+  <View :if="peek()" class="absolute bottom-0 left-0 right-0 top-0 z-30 items-center justify-center bg-black/25" testID="peek">
+    <View class="overflow-hidden h-[86%] w-[78%] bg-white rounded-[14px] shadow-2xl">
+      <View class="flex-row gap-[8px] items-center px-[12px] h-[36px] bg-[#f3f4f8]">
+        <Text class="flex-1 font-semibold text-[12px]" :style="{ color: '#3a3d5c' }" :numberOfLines="1">{{ displayTitle(peek().title, peek().url) + '  ·  ' + displayHost(peek().url) }}</Text>
+        <Button title="Open as Tab" variant="secondary" testID="peek-keep" @click="keepPeek()" />
+        <Button symbol="xmark" variant="ghost" iconOnly testID="peek-close" @click="closePeek()" />
+      </View>
+      <WebView :tab="peek().tab" class="flex-1" testID="peek-content" />
+    </View>
   </View>
 
   <View :if="downloadsOpen()" class="absolute bottom-[48px] left-[14px] z-30 gap-[6px] p-[10px] w-[300px] bg-white/95 rounded-[14px] shadow-2xl" material="hud" testID="downloads-panel">

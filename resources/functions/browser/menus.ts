@@ -103,6 +103,9 @@ export function spaceMenu(state: BrowserState, spaceId: string): MenuEntry[] {
     SEP,
     ...THEME_PRESETS.map(preset => ({ id: `theme:${preset.id}`, title: `${preset.title} Theme`, icon: 'paintpalette', ...(colors === preset.colors.join(',') ? { checked: true } : {}) })),
     SEP,
+    ...profiles(state).map(profile => ({ id: `profile:${profile}`, title: `${profileName(profile)} Profile`, icon: 'person.crop.circle', ...(space.profile === profile ? { checked: true } : {}) })),
+    ...(state.spaces.some(each => each.id !== space.id && each.profile === space.profile) ? [{ id: 'own-profile', title: 'Give This Space Its Own Profile', icon: 'person.badge.plus' }] : []),
+    SEP,
     { id: 'new-space', title: 'New Space', icon: 'plus' },
     { id: 'delete-space', title: 'Delete Space', icon: 'trash', disabled: state.spaces.length <= 1 },
   ]
@@ -122,8 +125,16 @@ export function runSpaceAction(state: BrowserState, spaceId: string, action: str
   if (action === 'new-space') return addSpace(state)
   if (action === 'delete-space') {
     // Its tabs' pages go with it.
-    const tabs = Object.values(state.items).filter(item => item.space === spaceId && item.kind === 'tab').map(item => item.id)
-    return { state: deleteSpace(state, spaceId), effect: { kind: 'released', tabs } }
+    return { state: deleteSpace(state, spaceId), effect: { kind: 'released', tabs: tabsOf(state, spaceId) } }
+  }
+  // A profile is a set of cookies and storage: a space on its own profile is signed in on its own.
+  if (action.startsWith('profile:')) return { state: updateSpace(state, spaceId, { profile: action.slice(8) }), effect: { kind: 'released', tabs: tabsOf(state, spaceId) } }
+  if (action === 'own-profile') {
+    const space = state.spaces.find(each => each.id === spaceId)
+    const taken = new Set(profiles(state))
+    let name = (space?.name ?? 'space').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'space'
+    for (let n = 2; taken.has(name); n++) name = `${name.replace(/-\d+$/, '')}-${n}`
+    return { state: updateSpace(state, spaceId, { profile: name }), effect: { kind: 'released', tabs: tabsOf(state, spaceId) } }
   }
   if (action.startsWith('icon:')) return { state: updateSpace(state, spaceId, { icon: action.slice(5) }), effect: null }
   if (action.startsWith('theme:')) {
@@ -132,3 +143,13 @@ export function runSpaceAction(state: BrowserState, spaceId: string, action: str
   }
   return { state, effect: null }
 }
+
+/** Every profile some space uses, the default first. */
+export function profiles(state: BrowserState): string[] {
+  return [...new Set(['default', ...state.spaces.map(space => space.profile)])]
+}
+
+export const profileName = (profile: string): string => (profile === 'default' ? 'Default' : profile.split('-').map(word => word[0]!.toUpperCase() + word.slice(1)).join(' '))
+
+/** A space's tabs: their pages go when the space changes profile or is deleted. */
+const tabsOf = (state: BrowserState, spaceId: string) => Object.values(state.items).filter(item => item.space === spaceId && item.kind === 'tab').map(item => item.id)
