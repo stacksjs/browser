@@ -13,6 +13,7 @@ import { historyApi } from './history-api'
 import { createSession } from './session'
 import type { Session } from './session'
 import { sessionApi } from './session-api'
+import { createSuggestions, suggestApi } from './suggest'
 
 /**
  * Routes only the desktop app serves. They run inside the app, on 127.0.0.1,
@@ -31,6 +32,7 @@ let history: History | undefined
 let session: Session | undefined
 let downloads: Downloads | undefined
 const database = () => (db ??= openBrowserDatabase(join(dataDir, 'Browser.sqlite')))
+const suggestRoutes = suggestApi(createSuggestions())
 const downloadRoutes = downloadsApi(() => (downloads ??= createDownloads(database())))
 const historyRoutes = historyApi(() => (history ??= createHistory(database())))
 const sessionRoutes = sessionApi(() => {
@@ -51,6 +53,7 @@ route.delete('/api/history', request => historyRoutes.forget(request)).skipCsrf(
 route.get('/api/session', () => sessionRoutes.load())
 route.put('/api/session', request => sessionRoutes.save(request)).skipCsrf()
 route.get('/api/session/archive', request => sessionRoutes.archived(request))
+route.get('/api/suggest', request => suggestRoutes.get(request))
 route.get('/api/downloads', request => downloadRoutes.list(request))
 route.post('/api/downloads', request => downloadRoutes.record(request)).skipCsrf()
 route.delete('/api/downloads', () => downloadRoutes.clear()).skipCsrf()

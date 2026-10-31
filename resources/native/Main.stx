@@ -1,4 +1,5 @@
 <script client>
+import { actionCandidates, actionSymbol } from '../functions/browser/actions'
 import { displayHost, displayTitle, resolveInput } from '../functions/browser/address'
 import { tabsToSleep } from '../functions/browser/hibernation'
 import { createHistoryClient } from '../functions/browser/history-client'
@@ -8,6 +9,7 @@ import { addSpace, rowMenu, runRowAction, runSpaceAction, spaceMenu } from '../f
 import { createPages } from '../functions/browser/pages'
 import { rank } from '../functions/browser/rank'
 import { createSessionClient } from '../functions/browser/session'
+import { createSuggestionClient } from '../functions/browser/suggestions'
 import { addFavorite, clearToday, closeTab, createState, leaveSplit, moveItem, openTab, pinTab, renameItem, reopenClosed, rows, selectTab, splitOf, splitTabs, switchSpace, tabOrder, unpinTab, updateItem, updateSpace } from '../functions/browser/sidebar'
 
 const web = craft.web
@@ -87,28 +89,38 @@ const commanding = state(null)
 const commandText = state('')
 const highlighted = state(0)
 const historyMatches = state([])
-const RESULT_SYMBOLS = { tab: 'square.on.square', pinned: 'pin', history: 'clock' }
+const suggestionMatches = state([])
+const searchEngine = state(craft.storage.getSync('browser.searchEngine') || 'google')
+const suggestClient = createSuggestionClient({ base: craft.app.url || '' })
+const RESULT_SYMBOLS = { tab: 'square.on.square', pinned: 'pin', history: 'clock', suggestion: 'magnifyingglass' }
+const ENGINE_NAMES = { google: 'Google', duckduckgo: 'DuckDuckGo', kagi: 'Kagi', bing: 'Bing', ecosia: 'Ecosia', brave: 'Brave' }
 const results = derived(() => {
   if (!commanding()) return []
   const text = commandText().trim()
-  const target = resolveInput(text, 'google')
-  const lead = target ? [{ kind: target.kind === 'url' ? 'action' : 'suggestion', id: 'go', title: target.kind === 'url' ? target.url : 'Search Google for “' + text + '”', url: target.url, symbol: target.kind === 'url' ? 'globe' : 'magnifyingglass' }] : []
+  const target = resolveInput(text, searchEngine())
+  const lead = target ? [{ kind: target.kind === 'url' ? 'go' : 'search', id: 'go', title: target.kind === 'url' ? target.url : 'Search ' + (ENGINE_NAMES[searchEngine()] || 'the web') + ' for “' + text + '”', url: target.url, symbol: target.kind === 'url' ? 'globe' : 'magnifyingglass' }] : []
   if (!text) return lead
   const tabs = Object.values(browser().items).filter(item => item.kind === 'tab' && item.url)
     .map(item => ({ kind: item.section === 'today' ? 'tab' : 'pinned', id: item.id, title: titleOf(item), url: item.url, icon: iconFor(item) }))
-  return [...lead, ...rank(text, [...tabs, ...historyMatches()], 7).map(result => ({ ...result, symbol: RESULT_SYMBOLS[result.kind] }))]
+  const candidates = [...tabs, ...historyMatches(), ...(commanding() === 'new' || commanding() === 'address' ? actionCandidates(Boolean(shownTab())) : []), ...suggestionMatches()]
+  return [...lead, ...rank(text, candidates, 8).map(result => ({ ...result, symbol: result.kind === 'action' ? actionSymbol(result.id) : RESULT_SYMBOLS[result.kind] }))]
 })
 
-// History answers a moment after typing pauses; an answer for older text is dropped.
+// History and suggestions answer a moment after typing pauses; an answer for older text is dropped.
 let historyTimer = null
 effect(() => {
   const text = commanding() ? commandText().trim() : ''
   clearTimeout(historyTimer)
-  if (!text) return historyMatches.set([])
+  if (!text) {
+    historyMatches.set([])
+    return suggestionMatches.set([])
+  }
   historyTimer = setTimeout(async () => {
-    const found = await historyClient.search(text, 8)
-    if (commanding() && commandText().trim() === text) historyMatches.set(found)
-  }, 50)
+    const [found, suggested] = await Promise.all([historyClient.search(text, 8), suggestClient(text, searchEngine())])
+    if (!commanding() || commandText().trim() !== text) return
+    historyMatches.set(found)
+    suggestionMatches.set(suggested)
+  }, 60)
 })
 
 function apply(next) {
@@ -193,7 +205,12 @@ function steer(event) {
 function pick(index) {
   const chosen = results()[index]
   if (!chosen || chosen.id === 'go') return submitCommand()
-  if (chosen.kind === 'history') return go(chosen.url)
+  if (chosen.kind === 'history' || chosen.kind === 'suggestion') return go(chosen.url)
+  if (chosen.kind === 'action') {
+    commanding.set(null)
+    splitting = null
+    return commands[chosen.id] && commands[chosen.id]()
+  }
   commanding.set(null)
   if (splitting && browser().items[splitting]) {
     apply(splitTabs(browser(), splitting, chosen.id).state)
@@ -218,7 +235,7 @@ function go(url) {
   else newTab(url)
 }
 function submitCommand() {
-  const target = resolveInput(commandText(), 'google')
+  const target = resolveInput(commandText(), searchEngine())
   if (!target) return commanding.set(null)
   go(target.url)
 }
@@ -276,6 +293,13 @@ function splitWithNew() {
   openCommand('new')
 }
 let splitting = null
+
+/** The page's HTML as text, in a tab beside it. */
+async function viewSource() {
+  if (!shownId()) return
+  const html = await web.evaluate(shownId(), 'document.documentElement.outerHTML', { isolated: true }).catch(() => null)
+  if (typeof html === 'string') newTab('data:text/plain;charset=utf-8,' + encodeURIComponent(html))
+}
 
 async function openLibrary(section) {
   library.set(section)
@@ -367,6 +391,9 @@ const commands = {
     pages.release(result.archived.map(tab => tab.id))
   },
   'split-view': () => splitWithNew(),
+  'print': () => shownId() && web.print(shownId()).catch(() => {}),
+  'view-source': () => viewSource(),
+  'set-default-browser': () => craft.desktop.setDefaultBrowser().catch(() => {}),
   'library': () => openLibrary('archive'),
   'downloads': () => openLibrary('downloads'),
   'escape': () => {
@@ -520,6 +547,7 @@ onMount(() => {
         <Icon :if="!result.icon" :symbol="result.symbol" class="h-[16px] w-[16px]" :style="{ color: index === highlighted() ? '#ffffff' : '#3a3d5c' }" />
         <Text class="flex-1 text-[14px]" :style="{ color: index === highlighted() ? '#ffffff' : '#1b1d3a' }" :numberOfLines="1">{{ result.title }}</Text>
         <Text :if="result.kind === 'tab' || result.kind === 'pinned'" class="text-[12px]" :style="{ color: index === highlighted() ? '#ffffffcc' : '#6b6e8f' }">Switch to Tab</Text>
+        <Text :if="result.kind === 'action'" class="text-[12px]" :style="{ color: index === highlighted() ? '#ffffffcc' : '#6b6e8f' }">Action</Text>
       </Pressable>
     </View>
   </View>

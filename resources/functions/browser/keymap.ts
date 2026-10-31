@@ -9,10 +9,10 @@ export interface Menu { label: string, items: MenuItem[] }
 
 export type Command =
   | 'new-tab' | 'new-window' | 'new-private-window' | 'little-arc' | 'reopen-closed' | 'close-tab' | 'open-location'
-  | 'copy-url' | 'pin-tab' | 'split-view' | 'toggle-sidebar' | 'find' | 'find-next' | 'find-previous'
+  | 'copy-url' | 'print' | 'pin-tab' | 'split-view' | 'toggle-sidebar' | 'find' | 'find-next' | 'find-previous'
   | 'reload' | 'hard-reload' | 'back' | 'forward' | 'zoom-in' | 'zoom-out' | 'zoom-reset'
   | 'next-tab' | 'previous-tab' | 'next-space' | 'previous-space' | 'new-space' | 'library' | 'downloads'
-  | 'clear-today' | 'developer-tools' | 'view-source' | `space-${number}` | `favorite-${number}`
+  | 'clear-today' | 'view-source' | `space-${number}` | `favorite-${number}`
 
 const SEP: MenuItem = { separator: true }
 const numbered = (prefix: 'space' | 'favorite', label: string, modifier: string): MenuItem[] =>
@@ -32,6 +32,7 @@ export function browserMenus(): Menu[] {
       { id: 'close-tab', label: 'Close Tab', shortcut: 'cmd+w' },
       SEP,
       { id: 'copy-url', label: 'Copy URL', shortcut: 'cmd+shift+c' },
+      { id: 'print', label: 'Print…', shortcut: 'cmd+p' },
     ] },
     { label: 'Find', items: [
       { id: 'find', label: 'Find…', shortcut: 'cmd+f' },
@@ -49,7 +50,7 @@ export function browserMenus(): Menu[] {
       { id: 'zoom-out', label: 'Zoom Out', shortcut: 'cmd+-' },
       { id: 'zoom-reset', label: 'Actual Size', shortcut: 'cmd+0' },
       SEP,
-      { id: 'developer-tools', label: 'Developer Tools', shortcut: 'cmd+alt+i' },
+      // Pages are inspectable: Inspect Element is on every page's own right-click menu.
       { id: 'view-source', label: 'View Source', shortcut: 'cmd+alt+u' },
     ] },
     { label: 'Tabs', items: [

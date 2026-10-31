@@ -29,6 +29,8 @@ export interface Candidate {
   id: string
   title: string
   url?: string
+  /** More words it answers to than its title shows (an action's synonyms). */
+  keywords?: string
   /** For history: see `frecency`. */
   frecency?: number
 }
@@ -65,7 +67,7 @@ export function rank(query: string, candidates: Candidate[], limit = 8): Ranked[
   const wanted = words(query)
   const seen = new Map<string, Ranked>()
   for (const candidate of candidates) {
-    const title = candidate.title.toLowerCase()
+    const title = (candidate.keywords ? `${candidate.title} ${candidate.keywords}` : candidate.title).toLowerCase()
     const url = (candidate.url ?? '').toLowerCase()
     const host = candidate.url ? displayHost(candidate.url).toLowerCase() : ''
     let score = 0
