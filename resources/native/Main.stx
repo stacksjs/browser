@@ -210,6 +210,8 @@ const commands = {
 
 onMount(() => {
   craft.desktop.setMenus(browserMenus())
+  // Sidebar changes and visits wait a moment to be sent together; quitting sends them now.
+  craft.desktop.onQuit?.(() => Promise.all([sessionClient.flush(), historyClient.flush()]))
   craft.desktop.onCommand((id) => {
     if (commands[id]) return commands[id]()
     const space = /^space-(\d)$/.exec(id)
