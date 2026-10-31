@@ -1,6 +1,7 @@
 <script client>
 import { displayHost, displayTitle, resolveInput } from '../functions/browser/address'
 import { tabsToSleep } from '../functions/browser/hibernation'
+import { createHistoryClient } from '../functions/browser/history-client'
 import { browserMenus } from '../functions/browser/keymap'
 import { createPages } from '../functions/browser/pages'
 import { rank } from '../functions/browser/rank'
@@ -28,11 +29,15 @@ const sidebarOpen = state(true)
 const hoveredRow = state(null)
 const dropAt = state(null)
 const pages = createPages(web)
+// Visits go to the app's own agent, which keeps and searches them (app/Desktop/Agent.ts).
+const historyClient = createHistoryClient({ base: craft.app.url || '' })
 
 // The command bar: a new tab (cmd-T) or this tab's address (cmd-L).
 const commanding = state(null)
 const commandText = state('')
 const highlighted = state(0)
+const historyMatches = state([])
+const RESULT_SYMBOLS = { tab: 'square.on.square', pinned: 'pin', history: 'clock' }
 const results = derived(() => {
   if (!commanding()) return []
   const text = commandText().trim()
@@ -41,7 +46,19 @@ const results = derived(() => {
   if (!text) return lead
   const tabs = Object.values(browser().items).filter(item => item.kind === 'tab' && item.url)
     .map(item => ({ kind: item.section === 'today' ? 'tab' : 'pinned', id: item.id, title: titleOf(item), url: item.url, icon: iconFor(item) }))
-  return [...lead, ...rank(text, tabs, 7).map(result => ({ ...result, symbol: 'square.on.square' }))]
+  return [...lead, ...rank(text, [...tabs, ...historyMatches()], 7).map(result => ({ ...result, symbol: RESULT_SYMBOLS[result.kind] }))]
+})
+
+// History answers a moment after typing pauses; an answer for older text is dropped.
+let historyTimer = null
+effect(() => {
+  const text = commanding() ? commandText().trim() : ''
+  clearTimeout(historyTimer)
+  if (!text) return historyMatches.set([])
+  historyTimer = setTimeout(async () => {
+    const found = await historyClient.search(text, 8)
+    if (commanding() && commandText().trim() === text) historyMatches.set(found)
+  }, 50)
 })
 
 let saveTimer = null
@@ -73,6 +90,7 @@ function close(id) {
   const result = closeTab(browser(), id)
   apply(result.state)
   if (result.removed) pages.release([id])
+  historyClient.forgetTab(id)
 }
 function textOf(event) {
   if (typeof event === 'string') return event
@@ -98,19 +116,24 @@ function steer(event) {
 function pick(index) {
   const chosen = results()[index]
   if (!chosen || chosen.id === 'go') return submitCommand()
+  if (chosen.kind === 'history') return go(chosen.url)
   commanding.set(null)
   show(chosen.id)
 }
-function submitCommand() {
-  const target = resolveInput(commandText(), 'google')
+/** Opens an address: in this tab from cmd-L, in a new one from cmd-T. */
+function go(url) {
   const mode = commanding()
   commanding.set(null)
-  if (!target) return
   if (mode === 'address' && shownId()) {
-    apply(updateItem(browser(), shownId(), { url: target.url }))
-    web.navigate(shownId(), target.url)
+    apply(updateItem(browser(), shownId(), { url }))
+    web.navigate(shownId(), url)
   }
-  else newTab(target.url)
+  else newTab(url)
+}
+function submitCommand() {
+  const target = resolveInput(commandText(), 'google')
+  if (!target) return commanding.set(null)
+  go(target.url)
 }
 
 function drop(row, event) {
@@ -171,6 +194,7 @@ onMount(() => {
   })
   web.on('state', (event) => {
     pageState.set({ ...pageState(), [event.tab]: event })
+    historyClient.report(event)
     const item = browser().items[event.tab]
     if (item && (event.title || event.url)) apply(updateItem(browser(), event.tab, { ...(event.title ? { title: event.title } : {}), ...(event.url ? { url: event.url } : {}) }))
   })
