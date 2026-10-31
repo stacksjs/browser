@@ -6,7 +6,8 @@
  */
 
 import type { BrowserState, Item } from './sidebar'
-import { addFavorite, createFolder, leaveSplit, moveItem, pinTab, resetTab, splitOf, splitTabs, ungroupFolder, unpinTab } from './sidebar'
+import { addFavorite, createFolder, createSpace, deleteSpace, leaveSplit, moveItem, pinTab, resetTab, splitOf, splitTabs, switchSpace, ungroupFolder, unpinTab, updateSpace } from './sidebar'
+import { nextPreset, THEME_PRESETS, themeFromColors } from './theme'
 
 export interface MenuEntry { id?: string, title?: string, icon?: string, separator?: boolean, disabled?: boolean }
 
@@ -85,4 +86,49 @@ export function runRowAction(state: BrowserState, item: Item, action: string, sh
     case 'close': return same({ kind: 'close', id: item.id })
     default: return same(null)
   }
+}
+
+/** Emoji a space can wear, offered in its menu. */
+export const SPACE_ICONS = ['🏠', '💼', '🎨', '📚', '🧪', '🎮', '✈️', '💡', '🌱', '⭐️']
+
+/** Right-clicking a space: rename, its icon, its colours, a new one, or deleting it. */
+export function spaceMenu(state: BrowserState, spaceId: string): MenuEntry[] {
+  const space = state.spaces.find(each => each.id === spaceId)
+  if (!space) return []
+  const colors = (space.theme.colors ?? []).join(',')
+  return [
+    { id: 'rename-space', title: 'Rename Space…', icon: 'pencil' },
+    SEP,
+    ...SPACE_ICONS.map(icon => ({ id: `icon:${icon}`, title: `${icon}  Icon`, ...(space.icon === icon ? { checked: true } : {}) })),
+    SEP,
+    ...THEME_PRESETS.map(preset => ({ id: `theme:${preset.id}`, title: `${preset.title} Theme`, icon: 'paintpalette', ...(colors === preset.colors.join(',') ? { checked: true } : {}) })),
+    SEP,
+    { id: 'new-space', title: 'New Space', icon: 'plus' },
+    { id: 'delete-space', title: 'Delete Space', icon: 'trash', disabled: state.spaces.length <= 1 },
+  ]
+}
+
+export type SpaceEffect = { kind: 'rename-space', id: string } | { kind: 'released', tabs: string[] } | null
+
+/** A new space with the next preset's colours, made the active one; its name is then edited in place. */
+export function addSpace(state: BrowserState): { state: BrowserState, effect: SpaceEffect } {
+  const preset = nextPreset(state.spaces.length)
+  const made = createSpace(state, { name: `Space ${state.spaces.length + 1}`, theme: themeFromColors(preset.colors)! })
+  return { state: switchSpace(made.state, made.space.id), effect: { kind: 'rename-space', id: made.space.id } }
+}
+
+export function runSpaceAction(state: BrowserState, spaceId: string, action: string): { state: BrowserState, effect: SpaceEffect } {
+  if (action === 'rename-space') return { state, effect: { kind: 'rename-space', id: spaceId } }
+  if (action === 'new-space') return addSpace(state)
+  if (action === 'delete-space') {
+    // Its tabs' pages go with it.
+    const tabs = Object.values(state.items).filter(item => item.space === spaceId && item.kind === 'tab').map(item => item.id)
+    return { state: deleteSpace(state, spaceId), effect: { kind: 'released', tabs } }
+  }
+  if (action.startsWith('icon:')) return { state: updateSpace(state, spaceId, { icon: action.slice(5) }), effect: null }
+  if (action.startsWith('theme:')) {
+    const preset = THEME_PRESETS.find(each => each.id === action.slice(6))
+    return { state: preset ? updateSpace(state, spaceId, { theme: themeFromColors(preset.colors)! }) : state, effect: null }
+  }
+  return { state, effect: null }
 }

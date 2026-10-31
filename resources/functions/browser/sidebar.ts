@@ -25,7 +25,12 @@ export interface Palette {
   selected: string
 }
 
-export interface SpaceTheme { light: Palette, dark: Palette }
+export interface SpaceTheme {
+  light: Palette
+  dark: Palette
+  /** The colours the palettes were made from (theme.ts), so the picker can show them again. */
+  colors?: string[]
+}
 
 export interface Space {
   id: string

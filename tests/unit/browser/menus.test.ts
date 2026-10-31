@@ -71,3 +71,26 @@ describe('names and folders', () => {
     expect(rows(flat, 'pinned').map(row => `${row.item.id}:${row.depth}`)).toEqual(['a:0', 'b:0', 'c:0'])
   })
 })
+
+describe('space menus', () => {
+  it('rename, change the icon and colours, add and delete spaces', async () => {
+    const { addSpace, runSpaceAction, spaceMenu } = await import('../../../resources/functions/browser/menus')
+    let state = sample()
+    expect(spaceMenu(state, 's').find(entry => entry.id === 'delete-space')!.disabled).toBe(true)
+    const added = addSpace(state)
+    state = added.state
+    expect(state.spaces).toHaveLength(2)
+    expect(state.activeSpace).toBe(state.spaces[1]!.id)
+    expect(added.effect).toEqual({ kind: 'rename-space', id: state.spaces[1]!.id })
+    expect(state.spaces[1]!.theme.colors).toEqual(['#5aa9e6', '#3d6ee0'])
+    const second = state.spaces[1]!.id
+    expect(spaceMenu(state, second).find(entry => entry.id === 'theme:ocean')).toMatchObject({ checked: true })
+    state = runSpaceAction(state, second, 'icon:💼').state
+    state = runSpaceAction(state, second, 'theme:mint').state
+    expect(state.spaces[1]).toMatchObject({ icon: '💼', theme: { colors: ['#5fd3a5'] } })
+    expect(spaceMenu(state, second).find(entry => entry.id === 'icon:💼')).toMatchObject({ checked: true })
+    const gone = runSpaceAction(state, 's', 'delete-space')
+    expect(gone.state.spaces.map(space => space.id)).toEqual([second])
+    expect(gone.effect).toEqual({ kind: 'released', tabs: ['a', 'b', 'c'] })
+  })
+})
