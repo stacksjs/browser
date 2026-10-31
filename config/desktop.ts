@@ -25,7 +25,7 @@ export default {
       printing: true,
     },
     dockMenu: [
-      { title: 'New Window', action: 'new-window' },
+      { title: 'New Tab', action: 'new-tab' },
       { title: 'New Private Window', action: 'new-private-window' },
     ],
     nativeScreens: ['Main'],

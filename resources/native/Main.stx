@@ -5,17 +5,25 @@ import { tabsToSleep } from '../functions/browser/hibernation'
 import { createHistoryClient } from '../functions/browser/history-client'
 import { browserMenus } from '../functions/browser/keymap'
 import { applyDownload, createLibraryClient, downloadFraction, formatBytes, formatTime, groupByDay } from '../functions/browser/library'
+import { createBlocker } from '../functions/browser/blocker'
 import { addSpace, rowMenu, runRowAction, runSpaceAction, spaceMenu } from '../functions/browser/menus'
 import { createPages } from '../functions/browser/pages'
 import { rank } from '../functions/browser/rank'
 import { createSessionClient } from '../functions/browser/session'
+import { createSitesClient, decide, permissionWords, remember, settingsFor, siteKey, stepZoom, unblockedHosts } from '../functions/browser/sites'
 import { createSuggestionClient } from '../functions/browser/suggestions'
 import { addFavorite, clearToday, closeTab, createState, leaveSplit, moveItem, openTab, pinTab, renameItem, reopenClosed, rows, selectTab, splitOf, splitTabs, switchSpace, tabOrder, unpinTab, updateItem, updateSpace } from '../functions/browser/sidebar'
 
 const web = craft.web
+// A private window keeps nothing: no saved sidebar, no history, pages in a store that never touches disk.
+const isPrivate = Boolean(craft.route && craft.route.params && craft.route.params.private)
+const PRIVATE_THEME = {
+  light: { background: '#3b2f63', backgroundTo: '#241c42', foreground: '#f1edff', hover: '#ffffff1a', selected: '#ffffff2e' },
+  dark: { background: '#2a2147', backgroundTo: '#18122e', foreground: '#f1edff', hover: '#ffffff1a', selected: '#ffffff2e' },
+}
 // The sidebar lives in the agent's database (app/Desktop/Agent.ts); it draws once that answers.
 const sessionClient = createSessionClient({ base: craft.app.url || '' })
-const browser = state(createState({ name: 'Personal' }))
+const browser = state(createState(isPrivate ? { name: 'Private', icon: '🕶️', theme: PRIVATE_THEME } : { name: 'Personal' }))
 const restored = state(false)
 let persisting = false
 const scheme = state(craft.appearance.colorScheme())
@@ -54,9 +62,25 @@ const renamingSpace = state(null)
 const spaceText = state('')
 const hoveredRow = state(null)
 const dropAt = state(null)
-const pages = createPages(web)
+const pages = createPages(web, { private: isPrivate })
 // Visits go to the app's own agent, which keeps and searches them (app/Desktop/Agent.ts).
-const historyClient = createHistoryClient({ base: craft.app.url || '' })
+const historyClient = createHistoryClient({ base: craft.app.url || '', isPrivate: () => isPrivate })
+// What the browser remembers per site (blocker, zoom, camera and microphone), and the ad blocker.
+const sitesClient = createSitesClient({ base: craft.app.url || '' })
+const sites = state({})
+const blocker = createBlocker({ base: craft.app.url || '', web })
+const shownSite = derived(() => settingsFor(sites(), siteKey(shownTab() && shownTab().url)))
+const siteControls = state(false)
+// Requests for the camera or microphone waiting for an answer, oldest first.
+const permissionRequests = state([])
+const permissionShown = derived(() => permissionRequests()[0] ?? null)
+// Find on page.
+const finding = state(false)
+const findText = state('')
+const findFound = state(true)
+// The downloads popover over the sidebar's footer.
+const downloadsOpen = state(false)
+const activeDownloads = derived(() => downloadList().filter(download => download.state === 'started').length)
 const libraryClient = createLibraryClient({ base: craft.app.url || '' })
 
 // A row being renamed in place.
@@ -136,6 +160,10 @@ function apply(next) {
  * saved one.
  */
 async function restore() {
+  if (isPrivate) {
+    restored.set(true)
+    return openCommand('new')
+  }
   let saved = null
   try {
     saved = await sessionClient.load()
@@ -271,6 +299,78 @@ function finishSpaceRename() {
   if (spaceText().trim()) apply(updateSpace(browser(), id, { name: spaceText().trim() }))
 }
 
+function saveSite(settings) {
+  sites.set({ ...sites(), [settings.host]: settings })
+  sitesClient.save(settings)
+  blocker.allow(unblockedHosts(sites())).catch(() => {})
+}
+function zoomBy(direction) {
+  const site = shownSite()
+  if (!site || !shownId()) return
+  const zoom = direction === 0 ? 1 : stepZoom(site.zoom, direction)
+  web.setZoom(shownId(), zoom)
+  saveSite({ ...site, zoom })
+}
+function toggleBlocking() {
+  const site = shownSite()
+  if (!site) return
+  saveSite({ ...site, blocking: !site.blocking })
+  // The page loads again with its new rules, as Arc does.
+  if (shownId()) web.reload(shownId())
+}
+async function clearSiteData() {
+  const site = shownSite()
+  if (!site) return
+  siteControls.set(false)
+  await web.clearData({ profile: space().profile, private: isPrivate, host: site.host }).catch(() => {})
+  if (shownId()) web.reload(shownId())
+}
+function setDevice(kind, decision) {
+  const site = shownSite()
+  if (site) saveSite({ ...site, [kind]: decision })
+}
+
+/** A site asks for the camera or microphone: a remembered answer goes straight back, otherwise the window asks. */
+function onPermission(event) {
+  const settings = settingsFor(sites(), event.origin.replace(/^www\./, ''))
+  const decision = settings ? decide(settings, event.kind) : 'ask'
+  if (decision !== 'ask') return web.answerPermission(event.request, decision === 'allow' ? 'grant' : 'deny')
+  permissionRequests.set([...permissionRequests(), event])
+}
+function answerPermission(allow) {
+  const request = permissionShown()
+  if (!request) return
+  permissionRequests.set(permissionRequests().slice(1))
+  web.answerPermission(request.request, allow ? 'grant' : 'deny')
+  const settings = settingsFor(sites(), request.origin.replace(/^www\./, ''))
+  if (settings) saveSite(remember(settings, request.kind, allow ? 'allow' : 'deny'))
+}
+
+function openFind() {
+  if (!shownId()) return
+  finding.set(true)
+  if (findText()) findNext(false)
+}
+function typeFind(event) {
+  findText.set(textOf(event))
+  findNext(false)
+}
+async function findNext(backwards) {
+  if (!shownId() || !findText()) return findFound.set(true)
+  const answer = await web.find(shownId(), findText(), { backwards }).catch(() => ({ found: false }))
+  findFound.set(Boolean(answer && answer.found))
+}
+
+const DEVICE_CHOICES = [{ label: 'Ask', value: 'ask' }, { label: 'Allow', value: 'allow' }, { label: 'Block', value: 'deny' }]
+function showAllDownloads() {
+  downloadsOpen.set(false)
+  openLibrary('downloads')
+}
+
+function openPrivateWindow() {
+  craft.desktop.openWindow({ name: 'private-' + Date.now().toString(36), route: 'Main', title: 'Private', titlebarStyle: 'transparent', width: 1180, height: 780, minWidth: 900, minHeight: 560, trafficLights: [18, 15], params: { private: true } })
+}
+
 function startRename(id) {
   const item = browser().items[id]
   if (!item) return
@@ -378,9 +478,14 @@ const commands = {
   'hard-reload': () => shownId() && web.reload(shownId(), { ignoreCache: true }),
   'back': () => shownId() && web.back(shownId()),
   'forward': () => shownId() && web.forward(shownId()),
-  'zoom-in': () => shownPage() && web.setZoom(shownId(), Math.min(3, (shownPage().zoom || 1) + 0.1)),
-  'zoom-out': () => shownPage() && web.setZoom(shownId(), Math.max(0.3, (shownPage().zoom || 1) - 0.1)),
-  'zoom-reset': () => shownId() && web.setZoom(shownId(), 1),
+  'zoom-in': () => zoomBy(1),
+  'zoom-out': () => zoomBy(-1),
+  'zoom-reset': () => zoomBy(0),
+  'find': () => openFind(),
+  'find-next': () => (finding() ? findNext(false) : openFind()),
+  'find-previous': () => (finding() ? findNext(true) : openFind()),
+  'site-controls': () => shownSite() && siteControls.set(!siteControls()),
+  'new-private-window': () => openPrivateWindow(),
   'next-tab': () => cycle(1),
   'previous-tab': () => cycle(-1),
   'next-space': () => apply(switchSpace(browser(), 'next')),
@@ -395,8 +500,12 @@ const commands = {
   'view-source': () => viewSource(),
   'set-default-browser': () => craft.desktop.setDefaultBrowser().catch(() => {}),
   'library': () => openLibrary('archive'),
-  'downloads': () => openLibrary('downloads'),
+  'downloads': () => downloadsOpen.set(!downloadsOpen()),
   'escape': () => {
+    if (permissionShown()) return answerPermission(false)
+    if (siteControls()) return siteControls.set(false)
+    if (downloadsOpen()) return downloadsOpen.set(false)
+    if (finding()) return finding.set(false)
     if (renaming()) return renaming.set(null)
     if (renamingSpace()) return renamingSpace.set(null)
     if (library()) return library.set(null)
@@ -408,7 +517,8 @@ const commands = {
 onMount(() => {
   craft.desktop.setMenus(browserMenus())
   // Sidebar changes and visits wait a moment to be sent together; quitting sends them now.
-  craft.desktop.onQuit?.(() => Promise.all([sessionClient.flush(), historyClient.flush()]))
+  if (!isPrivate) craft.desktop.onQuit?.(() => Promise.all([sessionClient.flush(), historyClient.flush()]))
+  web.on('permission', onPermission)
   craft.desktop.onCommand((id) => {
     if (commands[id]) return commands[id]()
     const space = /^space-(\d)$/.exec(id)
@@ -421,6 +531,9 @@ onMount(() => {
     historyClient.report(event)
     const item = browser().items[event.tab]
     if (item && (event.title || event.url)) apply(updateItem(browser(), event.tab, { ...(event.title ? { title: event.title } : {}), ...(event.url ? { url: event.url } : {}) }))
+    // Each site keeps its own zoom.
+    const site = settingsFor(sites(), siteKey(event.url))
+    if (site && Math.abs((event.zoom || 1) - site.zoom) > 0.001) web.setZoom(event.tab, site.zoom)
   })
   web.on('favicon', event => apply(updateItem(browser(), event.tab, { icon: event.url })))
   web.on('open', (event) => {
@@ -445,6 +558,12 @@ onMount(() => {
     if (sleepy.length) pages.release(sleepy)
   }, 60_000)
   restore()
+  // Settings before the blocker, so allowed sites are allowed from the first page.
+  sitesClient.all().then(async (all) => {
+    sites.set(all)
+    await blocker.allow(unblockedHosts(all))
+    await blocker.sync()
+  }).catch(error => console.error('Browser: the ad blocker could not start.', error))
 })
 </script>
 
@@ -458,17 +577,19 @@ onMount(() => {
       <Button symbol="arrow.clockwise" variant="toolbar" iconOnly :style="textStyle()" testID="reload" @click="commands.reload()" />
     </View>
 
-    <Pressable class="flex-row items-center px-[12px] h-[34px] rounded-[10px] duration-150 transition" :style="{ backgroundColor: palette().hover }" testID="address" @press="openCommand('address')">
+    <Pressable class="flex-row gap-[6px] items-center pl-[12px] pr-[4px] h-[34px] rounded-[10px] duration-150 transition" :style="{ backgroundColor: palette().hover }" testID="address" @press="openCommand('address')">
+      <Icon :if="shownPage() && shownPage().secure" symbol="lock.fill" class="h-[11px] w-[11px]" :style="{ color: palette().foreground, opacity: 0.6 }" />
       <Text class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ shownTab() ? displayHost(shownTab().url) : 'Search or enter address' }}</Text>
+      <Button :if="shownSite()" symbol="slider.horizontal.3" variant="ghost" iconOnly class="text-[11px]" :style="textStyle()" testID="site-controls" @click="commands['site-controls']()" />
     </Pressable>
 
-    <View :if="favorites().length" class="flex-row gap-[8px] py-[4px]" @drop="dropOnFavorites($event)">
+    <View :if="!isPrivate && favorites().length" class="flex-row gap-[8px] py-[4px]" @drop="dropOnFavorites($event)">
       <Pressable :for="row in favorites()" :key="row.item.id" class="flex-1 items-center justify-center h-[44px] bg-white/30 hover:bg-white/50 rounded-[12px] duration-150 transition" :style="rowStyle(row.item)" draggable :drag-data="row.item.id" :drag-url="row.item.url" :testID="'favorite-' + row.item.id" @press="show(row.item.id)" @contextmenu="openRowMenu(row.item)">
         <Image :if="iconFor(row.item)" :src="iconFor(row.item)" class="h-[18px] w-[18px]" />
         <Icon :if="!iconFor(row.item)" name="globe" class="h-[18px] w-[18px]" />
       </Pressable>
     </View>
-    <View :if="!favorites().length" class="items-center justify-center h-[64px] bg-white/15 border border-white/60 rounded-[12px]" @drop="dropOnFavorites($event)">
+    <View :if="!isPrivate && !favorites().length" class="items-center justify-center h-[64px] bg-white/15 border border-white/60 rounded-[12px]" @drop="dropOnFavorites($event)">
       <Text class="font-semibold text-[12px]" :style="textStyle()">Drag to add Favorites</Text>
     </View>
 
@@ -516,7 +637,8 @@ onMount(() => {
       <Pressable :for="each in browser().spaces" :key="each.id" class="items-center justify-center h-[22px] w-[22px] rounded-full" :style="each.id === space().id ? { backgroundColor: palette().selected } : { backgroundColor: '#00000000' }" :testID="'space-' + each.id" @press="apply(switchSpace(browser(), each.id))" @contextmenu="openSpaceMenu(each.id)">
         <Text class="text-[11px]" :style="textStyle()">{{ each.icon || '●' }}</Text>
       </Pressable>
-      <Button symbol="plus" variant="ghost" iconOnly class="text-[11px]" testID="add-space" @click="commands['new-space']()" />
+      <Button :if="!isPrivate" symbol="plus" variant="ghost" iconOnly class="text-[11px]" testID="add-space" @click="commands['new-space']()" />
+      <Button :symbol="activeDownloads() ? 'arrow.down.circle.fill' : 'arrow.down.circle'" variant="ghost" iconOnly class="text-[11px]" :style="textStyle()" testID="downloads" @click="commands.downloads()" />
     </View>
   </View>
 
@@ -550,6 +672,68 @@ onMount(() => {
         <Text :if="result.kind === 'action'" class="text-[12px]" :style="{ color: index === highlighted() ? '#ffffffcc' : '#6b6e8f' }">Action</Text>
       </Pressable>
     </View>
+  </View>
+
+  <View :if="finding()" class="absolute right-[20px] top-[16px] z-20 flex-row gap-[6px] items-center p-[6px] w-[340px] bg-white/95 rounded-[12px] shadow-xl" material="hud" testID="find-bar">
+    <TextInput class="flex-1 px-[6px] h-[28px] text-[13px]" :bordered="false" :value="findText()" autofocus select-text-on-focus placeholder="Find on page" testID="find" @input="typeFind($event)" @submit="findNext(false)" />
+    <Text :if="findText() && !findFound()" class="text-[12px]" :style="{ color: '#c0392b' }">Not found</Text>
+    <Button symbol="chevron.up" variant="ghost" iconOnly testID="find-previous" @click="findNext(true)" />
+    <Button symbol="chevron.down" variant="ghost" iconOnly testID="find-next" @click="findNext(false)" />
+    <Button symbol="xmark" variant="ghost" iconOnly testID="close-find" @click="finding.set(false)" />
+  </View>
+
+  <View :if="permissionShown()" class="absolute left-[300px] right-[40px] top-[16px] z-30 items-center" testID="permission">
+    <View class="flex-row gap-[12px] items-center p-[14px] w-[460px] bg-white/95 rounded-[14px] shadow-2xl" material="hud">
+      <Icon :symbol="permissionShown().kind === 'microphone' ? 'mic.fill' : 'video.fill'" class="h-[20px] w-[20px]" :style="{ color: '#3b5bfd' }" />
+      <Text class="flex-1 text-[13px]" :style="{ color: '#1b1d3a' }">{{ permissionShown().origin + ' wants to use your ' + permissionWords(permissionShown().kind) + '.' }}</Text>
+      <Button title="Don't Allow" variant="secondary" testID="deny-permission" @click="answerPermission(false)" />
+      <Button title="Allow" variant="primary" testID="allow-permission" @click="answerPermission(true)" />
+    </View>
+  </View>
+
+  <View :if="siteControls() && shownSite()" class="absolute left-[14px] top-[86px] z-30 gap-[10px] p-[14px] w-[300px] bg-white/95 rounded-[14px] shadow-2xl" material="hud" testID="site-panel">
+    <View class="flex-row gap-[8px] items-center">
+      <Icon :symbol="shownPage() && shownPage().secure ? 'lock.fill' : 'lock.open'" class="h-[14px] w-[14px]" :style="{ color: '#3a3d5c' }" />
+      <Text class="flex-1 font-semibold text-[14px]" :style="{ color: '#1b1d3a' }" :numberOfLines="1">{{ shownSite().host }}</Text>
+      <Button symbol="link" variant="ghost" iconOnly testID="site-copy" @click="commands['copy-url']()" />
+    </View>
+    <View class="h-[1px] bg-black/10"></View>
+    <View class="flex-row items-center">
+      <Text class="flex-1 text-[13px]" :style="{ color: '#1b1d3a' }">Block ads and trackers</Text>
+      <Switch :value="shownSite().blocking" testID="site-blocking" @change="toggleBlocking()" />
+    </View>
+    <View class="flex-row gap-[6px] items-center">
+      <Text class="flex-1 text-[13px]" :style="{ color: '#1b1d3a' }">Zoom</Text>
+      <Button symbol="minus" variant="secondary" iconOnly testID="site-zoom-out" @click="zoomBy(-1)" />
+      <Text class="w-[48px] text-[13px] text-center" :style="{ color: '#1b1d3a' }">{{ Math.round(shownSite().zoom * 100) + '%' }}</Text>
+      <Button symbol="plus" variant="secondary" iconOnly testID="site-zoom-in" @click="zoomBy(1)" />
+    </View>
+    <View :for="kind in ['camera', 'microphone']" :key="kind" class="flex-row items-center">
+      <Text class="flex-1 text-[13px]" :style="{ color: '#1b1d3a' }">{{ kind === 'camera' ? 'Camera' : 'Microphone' }}</Text>
+      <Picker :value="shownSite()[kind]" :options="DEVICE_CHOICES" :testID="'site-' + kind" @change="setDevice(kind, $event.value || $event)" />
+    </View>
+    <View class="h-[1px] bg-black/10"></View>
+    <Button title="Clear Cookies and Site Data" variant="ghost" testID="site-clear" @click="clearSiteData()" />
+  </View>
+
+  <View :if="downloadsOpen()" class="absolute bottom-[48px] left-[14px] z-30 gap-[6px] p-[10px] w-[300px] bg-white/95 rounded-[14px] shadow-2xl" material="hud" testID="downloads-panel">
+    <View class="flex-row items-center px-[4px]">
+      <Text class="flex-1 font-semibold text-[13px]" :style="{ color: '#1b1d3a' }">Downloads</Text>
+      <Button title="Show All" variant="ghost" testID="downloads-all" @click="showAllDownloads()" />
+    </View>
+    <Text :if="!downloadList().length" class="py-[16px] text-[12px] text-center" :style="{ color: '#6b6e8f' }">Files you download show up here.</Text>
+    <Pressable :for="download in downloadList().slice(0, 6)" :key="download.id" class="gap-[4px] px-[6px] py-[6px] hover:bg-black/5 rounded-[8px]" :testID="'download-' + download.id" @press="download.state === 'finished' ? web.openDownload(download.path).catch(() => {}) : null">
+      <View class="flex-row gap-[8px] items-center">
+        <Icon :symbol="download.state === 'failed' ? 'exclamationmark.circle' : 'doc'" class="h-[14px] w-[14px]" :style="{ color: '#3a3d5c' }" />
+        <Text class="flex-1 text-[13px]" :style="{ color: '#1b1d3a' }" :numberOfLines="1">{{ download.name || download.url }}</Text>
+        <Button :if="download.state === 'started'" symbol="xmark.circle" variant="ghost" iconOnly :testID="'cancel-' + download.id" @click="web.cancelDownload(download.id).catch(() => {})" />
+        <Button :if="download.state === 'finished'" symbol="magnifyingglass" variant="ghost" iconOnly :testID="'show-' + download.id" @click="web.revealDownload(download.path).catch(() => {})" />
+      </View>
+      <View :if="download.state === 'started'" class="overflow-hidden h-[3px] bg-black/10 rounded-full">
+        <View class="h-[3px] bg-[#3b5bfd]" :style="{ width: ((downloadFraction(download) ?? 0.1) * 100) + '%' }"></View>
+      </View>
+      <Text class="text-[11px]" :style="{ color: '#6b6e8f' }">{{ downloadDetail(download) }}</Text>
+    </Pressable>
   </View>
 
   <View :if="library()" class="absolute bottom-0 left-0 right-0 top-0 z-30 items-center justify-center bg-black/15" testID="library-backdrop">
