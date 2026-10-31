@@ -8,8 +8,13 @@ export interface HistoryVisit { url: string, title?: string, at: number }
 export interface HistoryTitle { url: string, title: string }
 export interface HistoryResult { url: string, title: string, frecency: number, lastVisitAt: number }
 
+/** A page brought over from another browser: how often it was visited, and when last. */
+export interface ImportedPage { url: string, title: string, visits: number, lastVisitAt: number }
+
 export interface History {
   record: (visits: HistoryVisit[]) => void
+  /** Pages from another browser; a page already here keeps the larger count and the later visit. */
+  importPages: (pages: ImportedPage[]) => number
   retitle: (titles: HistoryTitle[]) => void
   /** Pages matching every word typed, most used first. */
   search: (text: string, limit?: number, now?: number) => HistoryResult[]
@@ -92,6 +97,24 @@ export function createHistory(db: Database): History {
     }
   })
 
+  const importPages = db.transaction((pages: ImportedPage[]) => {
+    let added = 0
+    for (const page of pages) {
+      if (!isRecordable(page.url) || !Number.isFinite(page.lastVisitAt)) continue
+      const visits = Math.max(1, Math.round(page.visits) || 1)
+      const row = find.get(page.url)
+      if (!row) {
+        insert.run(page.url, displayHost(page.url), page.title ?? '', JSON.stringify([page.lastVisitAt]), page.lastVisitAt)
+        if (visits > 1) db.query('UPDATE history_entries SET visits = ? WHERE url = ?').run(visits, page.url)
+        added++
+        continue
+      }
+      const times = [page.lastVisitAt, ...(JSON.parse(row.recent_visits) as number[])].sort((a, b) => b - a).slice(0, KEPT_VISITS)
+      update.run(row.title || page.title, Math.max(row.visits, visits), JSON.stringify([...new Set(times)]), Math.max(row.last_visit_at, page.lastVisitAt), row.id)
+    }
+    return added
+  })
+
   const retitle = db.transaction((titles: HistoryTitle[]) => {
     for (const { url, title } of titles) {
       if (title) setTitle.run(title, url, title)
@@ -100,6 +123,7 @@ export function createHistory(db: Database): History {
 
   return {
     record: visits => record(visits),
+    importPages: pages => importPages(pages),
     retitle: titles => retitle(titles),
     search(text, limit = 8, now = Date.now()) {
       const words = text.toLowerCase().split(/\s+/).filter(Boolean)

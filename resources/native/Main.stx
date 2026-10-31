@@ -8,11 +8,14 @@ import { applyDownload, createLibraryClient, downloadFraction, formatBytes, form
 import { createBlocker } from '../functions/browser/blocker'
 import { boostScripts, createBoostClient, newBoost, ZAP_SCRIPT, zapReadScript } from '../functions/browser/boosts'
 import { addSpace, rowMenu, runRowAction, runSpaceAction, spaceMenu } from '../functions/browser/menus'
+import { mergeImported } from '../functions/browser/arc-import'
+import { createImportClient, importSummary, nextStep, SETTLE_IN_TIPS } from '../functions/browser/onboarding'
 import { createPages } from '../functions/browser/pages'
 import { shouldPeek } from '../functions/browser/peek'
 import { rank } from '../functions/browser/rank'
 import { createSessionClient } from '../functions/browser/session'
 import { archiveAfterMs, readSettings } from '../functions/browser/settings'
+import { THEME_PRESETS, themeFromColors } from '../functions/browser/theme'
 import { createSitesClient, decide, permissionWords, remember, settingsFor, siteKey, stepZoom, unblockedHosts } from '../functions/browser/sites'
 import { createSuggestionClient } from '../functions/browser/suggestions'
 import { addFavorite, autoArchive, clearToday, closeTab, createState, newId, leaveSplit, moveItem, openTab, pinTab, renameItem, reopenClosed, rows, selectTab, splitOf, splitTabs, switchSpace, tabOrder, unpinTab, updateItem, updateSpace } from '../functions/browser/sidebar'
@@ -89,6 +92,12 @@ const peek = state(null)
 // Boosts: each site's own CSS, JS and zapped elements.
 const boostClient = createBoostClient({ base: craft.app.url || '' })
 const boosts = state([])
+// First launch: a few steps over the window (onboarding.ts).
+const importClient = createImportClient({ base: craft.app.url || '' })
+const onboarding = state(!isPrivate && craft.storage.getSync('browser.onboarded') !== true ? 'welcome' : null)
+const arcPreview = state(null)
+const importing = state(false)
+const imported = state('')
 const shownBoost = derived(() => (shownSite() ? boosts().find(boost => boost.host === shownSite().host) ?? null : null))
 const boostEditor = state(false)
 const zapping = state(false)
@@ -189,7 +198,8 @@ async function restore() {
     sessionClient.save(browser())
     if (await sessionClient.flush() && legacy) craft.storage.remove('browser.sidebar')
   }
-  if (!Object.keys(browser().items).length) newTab('https://stacksjs.com')
+  // A first launch waits for onboarding, whose import may fill the sidebar.
+  if (!Object.keys(browser().items).length && !onboarding()) openCommand('new')
 }
 
 effect(() => {
@@ -206,6 +216,8 @@ function rowStyle(row) {
 function textStyle() { return { color: palette().foreground } }
 function iconFor(item) { return item.icon && item.icon.startsWith('http') ? item.icon : '' }
 function emojiFor(item) { return item.icon && !item.icon.startsWith('http') ? item.icon : '' }
+/** A space's icon is an emoji or an SF Symbol name (Arc's spaces bring symbols). */
+function isSymbol(icon) { return Boolean(icon) && /^[a-z0-9]+(\.[a-z0-9]+)*$/.test(icon) }
 function titleOf(item) { return item.name || displayTitle(item.title, item.url) }
 /** A split view's row reads as its tabs' titles side by side. */
 function rowTitle(row) { return row.panes ? row.panes.map(titleOf).join('  |  ') : titleOf(row.item) }
@@ -480,6 +492,34 @@ function stopZap() {
   collectZapped(true)
 }
 
+async function advanceOnboarding() {
+  const next = nextStep(onboarding())
+  if (!next) return finishOnboarding()
+  onboarding.set(next)
+  if (next === 'import' && !arcPreview()) arcPreview.set(await importClient.preview())
+}
+function finishOnboarding() {
+  onboarding.set(null)
+  craft.storage.setSync('browser.onboarded', true)
+  if (!Object.keys(browser().items).length) openCommand('new')
+}
+/** Arc's sidebar into this one, and its history into the agent. */
+async function importArc() {
+  importing.set(true)
+  const result = await importClient.run()
+  importing.set(false)
+  if (!result) return imported.set('Arc\'s data could not be read.')
+  if (result.state) apply(mergeImported(browser(), result.state))
+  imported.set('Brought over ' + importSummary(result.report || undefined, result.historyImported) + '.')
+}
+function pickTheme(preset) {
+  apply(updateSpace(browser(), space().id, { theme: themeFromColors(preset.colors) }))
+}
+async function onboardDefault() {
+  await craft.desktop.setDefaultBrowser().catch(() => false)
+  advanceOnboarding()
+}
+
 function openPrivateWindow() {
   craft.desktop.openWindow({ name: 'private-' + Date.now().toString(36), route: 'Main', title: 'Private', titlebarStyle: 'transparent', width: 1180, height: 780, minWidth: 900, minHeight: 560, trafficLights: [18, 15], params: { private: true } })
 }
@@ -732,7 +772,8 @@ onMount(() => {
     </View>
 
     <Pressable class="flex-row gap-[8px] items-center pt-[6px] px-[8px] h-[30px]" testID="space-header" @contextmenu="openSpaceMenu(space().id)">
-      <Text class="font-semibold text-[13px]" :style="textStyle()">{{ space().icon || '✦' }}</Text>
+      <Icon :if="isSymbol(space().icon)" :symbol="space().icon" class="h-[14px] w-[14px]" :style="textStyle()" />
+      <Text :if="!isSymbol(space().icon)" class="font-semibold text-[13px]" :style="textStyle()">{{ space().icon || '✦' }}</Text>
       <Text :if="renamingSpace() !== space().id" class="flex-1 font-semibold text-[13px]" :style="textStyle()" :numberOfLines="1">{{ space().name }}</Text>
       <TextInput :if="renamingSpace() === space().id" class="flex-1 font-semibold text-[13px]" :bordered="false" :value="spaceText()" autofocus select-text-on-focus testID="rename-space" @input="spaceText.set(textOf($event))" @submit="finishSpaceRename()" @blur="finishSpaceRename()" />
     </Pressable>
@@ -773,7 +814,8 @@ onMount(() => {
 
     <View class="flex-row gap-[10px] items-center justify-center h-[32px]">
       <Pressable :for="each in browser().spaces" :key="each.id" class="items-center justify-center h-[22px] w-[22px] rounded-full" :style="each.id === space().id ? { backgroundColor: palette().selected } : { backgroundColor: '#00000000' }" :testID="'space-' + each.id" @press="apply(switchSpace(browser(), each.id))" @contextmenu="openSpaceMenu(each.id)">
-        <Text class="text-[11px]" :style="textStyle()">{{ each.icon || '●' }}</Text>
+        <Icon :if="isSymbol(each.icon)" :symbol="each.icon" class="h-[11px] w-[11px]" :style="textStyle()" />
+        <Text :if="!isSymbol(each.icon)" class="text-[11px]" :style="textStyle()">{{ each.icon || '●' }}</Text>
       </Pressable>
       <Button :if="!isPrivate" symbol="plus" variant="ghost" iconOnly class="text-[11px]" testID="add-space" @click="commands['new-space']()" />
       <Button :symbol="activeDownloads() ? 'arrow.down.circle.fill' : 'arrow.down.circle'" variant="ghost" iconOnly class="text-[11px]" :style="textStyle()" testID="downloads" @click="commands.downloads()" />
@@ -904,6 +946,45 @@ onMount(() => {
       </View>
       <Text class="text-[11px]" :style="{ color: '#6b6e8f' }">{{ downloadDetail(download) }}</Text>
     </Pressable>
+  </View>
+
+  <View :if="onboarding()" class="absolute bottom-0 left-0 right-0 top-0 z-40 items-center justify-center bg-black/30" testID="onboarding">
+    <View class="overflow-hidden flex-row h-[520px] w-[860px] bg-white rounded-[22px] shadow-2xl">
+      <View class="flex-1 gap-[16px] justify-center p-[44px]">
+        <Text class="font-semibold text-[#3b5bfd] text-[13px]">{{ onboarding() === 'welcome' ? 'WELCOME' : onboarding() === 'import' ? 'BRING YOUR ARC' : onboarding() === 'theme' ? 'MAKE IT YOURS' : onboarding() === 'default' ? 'ONE MORE THING' : 'LET\'S SETTLE IN' }}</Text>
+        <Text class="font-bold text-[#14162e] text-[34px]">{{ onboarding() === 'welcome' ? 'A calmer way to browse.' : onboarding() === 'import' ? 'Your spaces, pinned tabs and history, right here.' : onboarding() === 'theme' ? 'Pick a colour for this space.' : onboarding() === 'default' ? 'Open your links here?' : 'A few keys worth knowing.' }}</Text>
+
+        <Text :if="onboarding() === 'welcome'" class="text-[#4a4d6b] text-[15px]">Your tabs live in the sidebar, sorted into spaces. Pin what you keep, and let Today tidy itself. Ads and trackers are blocked from the start.</Text>
+
+        <View :if="onboarding() === 'import'" class="gap-[10px]">
+          <Text class="text-[#4a4d6b] text-[15px]">{{ !arcPreview() ? 'Looking for Arc…' : arcPreview().found ? 'Found in Arc: ' + importSummary(arcPreview().report, arcPreview().historyPages) + '. Arc\'s files are only read, never changed.' : 'Arc is not on this Mac, so there is nothing to bring over.' }}</Text>
+          <Text :if="imported()" class="font-semibold text-[#1f8a4c] text-[14px]">{{ imported() }}</Text>
+        </View>
+
+        <View :if="onboarding() === 'theme'" class="flex-row flex-wrap gap-[10px]">
+          <Pressable :for="preset in THEME_PRESETS" :key="preset.id" class="items-center justify-center h-[44px] w-[44px] rounded-full" :style="{ gradientDirection: 'to-br', gradientFrom: preset.colors[0], gradientTo: preset.colors[1] || preset.colors[0], borderWidth: (space().theme.colors || []).join() === preset.colors.join() ? 3 : 0, borderColor: '#14162e' }" :testID="'theme-' + preset.id" @press="pickTheme(preset)"></Pressable>
+        </View>
+
+        <Text :if="onboarding() === 'default'" class="text-[#4a4d6b] text-[15px]">Links from Mail, Messages and every other app open in a small window over what you are doing, and move into the browser with one click.</Text>
+
+        <View :if="onboarding() === 'done'" class="gap-[10px]">
+          <View :for="tip in SETTLE_IN_TIPS" :key="tip.keys" class="flex-row gap-[12px] items-center">
+            <View class="items-center justify-center px-[8px] h-[26px] min-w-[52px] bg-[#eef0fb] rounded-[7px]"><Text class="font-semibold text-[#3b5bfd] text-[12px]">{{ tip.keys }}</Text></View>
+            <View class="flex-1"><Text class="font-semibold text-[#14162e] text-[13px]">{{ tip.title }}</Text><Text class="text-[#6b6e8f] text-[12px]">{{ tip.detail }}</Text></View>
+          </View>
+        </View>
+
+        <View class="flex-row gap-[10px] pt-[8px]">
+          <Button :if="onboarding() === 'import' && arcPreview() && arcPreview().found && !imported()" :title="importing() ? 'Importing…' : 'Import from Arc'" variant="primary" :disabled="importing()" testID="onboarding-import" @click="importArc()" />
+          <Button :if="onboarding() === 'default'" title="Make Default Browser" variant="primary" testID="onboarding-default" @click="onboardDefault()" />
+          <Button :title="onboarding() === 'welcome' ? 'Get Started' : onboarding() === 'done' ? 'Start Browsing' : onboarding() === 'import' && !imported() && arcPreview() && arcPreview().found ? 'Skip' : onboarding() === 'default' ? 'Not Now' : 'Continue'" :variant="onboarding() === 'welcome' || onboarding() === 'done' || onboarding() === 'theme' || (onboarding() === 'import' && (imported() || (arcPreview() && !arcPreview().found))) ? 'primary' : 'secondary'" testID="onboarding-next" @click="advanceOnboarding()" />
+        </View>
+      </View>
+      <View class="justify-end p-[30px] w-[320px]" :style="{ gradientDirection: 'to-br', gradientFrom: '#5b7bff', gradientTo: '#2a3fd6' }">
+        <Text class="font-bold text-[22px] text-white">Browser</Text>
+        <Text class="text-[#dfe5ff] text-[13px]">Native on your Mac. Pages in WebKit, everything else drawn by AppKit and run by zig-js.</Text>
+      </View>
+    </View>
   </View>
 
   <View :if="library()" class="absolute bottom-0 left-0 right-0 top-0 z-30 items-center justify-center bg-black/15" testID="library-backdrop">

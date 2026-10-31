@@ -146,3 +146,22 @@ export function importArcSidebar(storable: Json, now = Date.now()): { state: Bro
 export function chromiumTime(microseconds: number): number {
   return Math.round(microseconds / 1000 - 11_644_473_600_000)
 }
+
+/**
+ * An import added to the sidebar there is. A sidebar with nothing in it yet is
+ * replaced outright; otherwise Arc's spaces come after the existing ones and
+ * its favorites after the existing favorites. Rows already present (a second
+ * import: Arc's ids are kept) are left as they are.
+ */
+export function mergeImported(current: BrowserState, imported: BrowserState): BrowserState {
+  if (!Object.keys(current.items).length) return imported
+  const spaces = [...current.spaces, ...imported.spaces.filter(space => !current.spaces.some(each => each.id === space.id))]
+  const items = { ...current.items }
+  const lastFavorite = Object.values(current.items).filter(item => item.section === 'favorites' && !item.parent).map(item => item.order).sort().at(-1) ?? null
+  const newFavorites = Object.values(imported.items).filter(item => item.section === 'favorites' && !item.parent && !items[item.id]).sort((a, b) => (a.order < b.order ? -1 : 1))
+  const favoriteKeys = keysBetween(lastFavorite, null, newFavorites.length)
+  newFavorites.forEach((item, index) => { items[item.id] = { ...item, order: favoriteKeys[index]! } })
+  for (const item of Object.values(imported.items)) if (!items[item.id]) items[item.id] = item
+  const selected = { ...Object.fromEntries(spaces.map(space => [space.id, null])), ...current.selected }
+  return { ...current, spaces, items, selected }
+}
