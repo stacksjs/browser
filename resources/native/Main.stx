@@ -202,7 +202,12 @@ async function restore() {
   if (!Object.keys(browser().items).length && !onboarding()) openCommand('new')
 }
 
+// Pages wait for the blocker's lists (WebKit has them compiled from an earlier
+// run, so it is quick), or 1.5 s if the agent is slow: no first load goes unblocked.
+const blockerReady = state(false)
+setTimeout(() => blockerReady.set(true), 1500)
 effect(() => {
+  if (!blockerReady()) return
   for (const tab of panes()) {
     if (tab.kind === 'tab' && tab.url) pages.show(tab, space().profile)
   }
@@ -214,7 +219,10 @@ function rowStyle(row) {
   return showing ? { backgroundColor: palette().selected } : {}
 }
 function textStyle() { return { color: palette().foreground } }
-function iconFor(item) { return item.icon && item.icon.startsWith('http') ? item.icon : '' }
+// Icons that failed to load (a site with no /favicon.ico) fall back to the globe for this run.
+const brokenIcons = state({})
+function iconFor(item) { return item.icon && item.icon.startsWith('http') && !brokenIcons()[item.icon] ? item.icon : '' }
+function iconFailed(url) { if (url && !brokenIcons()[url]) brokenIcons.set({ ...brokenIcons(), [url]: true }) }
 function emojiFor(item) { return item.icon && !item.icon.startsWith('http') ? item.icon : '' }
 /** A space's icon is an emoji or an SF Symbol name (Arc's spaces bring symbols). */
 function isSymbol(icon) { return Boolean(icon) && /^[a-z0-9]+(\.[a-z0-9]+)*$/.test(icon) }
@@ -741,7 +749,7 @@ onMount(() => {
     await blocker.setBoosts(boostScripts(saved))
     await blocker.allow(unblockedHosts(all))
     if (settings().blocking) await blocker.sync({ cookieConsent: settings().cookieConsent })
-  }).catch(error => console.error('Browser: the ad blocker could not start.', error))
+  }).catch(error => console.error('Browser: the ad blocker could not start.', error)).finally(() => blockerReady.set(true))
 })
 </script>
 
@@ -763,7 +771,7 @@ onMount(() => {
 
     <View :if="!isPrivate && favorites().length" class="flex-row gap-[8px] py-[4px]" @drop="dropOnFavorites($event)">
       <Pressable :for="row in favorites()" :key="row.item.id" class="flex-1 items-center justify-center h-[44px] bg-white/30 hover:bg-white/50 rounded-[12px] duration-150 transition" :style="rowStyle(row.item)" draggable :drag-data="row.item.id" :drag-url="row.item.url" :testID="'favorite-' + row.item.id" @press="show(row.item.id)" @contextmenu="openRowMenu(row.item)">
-        <Image :if="iconFor(row.item)" :src="iconFor(row.item)" class="h-[18px] w-[18px]" />
+        <Image :if="iconFor(row.item)" :src="iconFor(row.item)" class="h-[18px] w-[18px]" @error="iconFailed(iconFor(row.item))" />
         <Icon :if="!iconFor(row.item)" name="globe" class="h-[18px] w-[18px]" />
       </Pressable>
     </View>
@@ -782,7 +790,7 @@ onMount(() => {
       <Pressable :for="row in pinned()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="{ ...rowStyle(row), paddingLeft: 10 + row.depth * 16 }" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :drop-inside="row.item.kind === 'folder'" :testID="'pinned-' + row.item.id" @press="row.item.kind === 'folder' ? apply(updateItem(browser(), row.item.id, { collapsed: !row.item.collapsed })) : show(row.item.id)" @contextmenu="openRowMenu(row.item)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
         <Icon :if="row.item.kind === 'folder'" :symbol="row.item.collapsed ? 'folder' : 'folder.fill'" class="h-[16px] w-[16px]" :style="textStyle()" />
         <Icon :if="isSplitRow(row)" symbol="rectangle.split.2x1" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Image :if="row.item.kind === 'tab' && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" />
+        <Image :if="row.item.kind === 'tab' && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" @error="iconFailed(iconFor(row.item))" />
         <Text :if="row.item.kind === 'tab' && !iconFor(row.item) && emojiFor(row.item)" class="w-[16px] text-[13px]">{{ emojiFor(row.item) }}</Text>
         <Icon :if="row.item.kind === 'tab' && !iconFor(row.item) && !emojiFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
         <Text :if="renaming() !== row.item.id" class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ rowTitle(row) }}</Text>
@@ -804,7 +812,7 @@ onMount(() => {
 
       <Pressable :for="row in today()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] px-[10px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="rowStyle(row)" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :testID="'today-' + row.item.id" @press="show(row.item.id)" @contextmenu="openRowMenu(row.item)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
         <Icon :if="isSplitRow(row)" symbol="rectangle.split.2x1" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Image :if="!isSplitRow(row) && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" />
+        <Image :if="!isSplitRow(row) && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" @error="iconFailed(iconFor(row.item))" />
         <Icon :if="!isSplitRow(row) && !iconFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
         <Text :if="renaming() !== row.item.id" class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ rowTitle(row) }}</Text>
         <TextInput :if="renaming() === row.item.id" class="flex-1 text-[13px]" :bordered="false" :value="renameText()" autofocus select-text-on-focus :testID="'rename-' + row.item.id" @input="renameText.set(textOf($event))" @submit="finishRename()" @blur="finishRename()" />
@@ -830,7 +838,7 @@ onMount(() => {
     <View :if="panes().length > 1" class="flex-1 flex-row gap-[8px]">
       <View :for="pane in panes()" :key="pane.id" class="overflow-hidden flex-1 bg-white rounded-[12px] shadow-lg" :style="pane.id === shownId() ? { borderWidth: 2, borderColor: '#3b5bfd' } : { borderWidth: 2, borderColor: '#00000000' }">
         <Pressable class="flex-row gap-[6px] items-center px-[10px] h-[28px] bg-black/5" :testID="'pane-' + pane.id" @press="show(pane.id)">
-          <Image :if="iconFor(pane)" :src="iconFor(pane)" class="h-[14px] w-[14px]" />
+          <Image :if="iconFor(pane)" :src="iconFor(pane)" class="h-[14px] w-[14px]" @error="iconFailed(iconFor(pane))" />
           <Text class="flex-1 text-[12px]" :style="{ color: '#3a3d5c' }" :numberOfLines="1">{{ titleOf(pane) }}</Text>
           <Button symbol="xmark" variant="ghost" iconOnly class="text-[10px]" :testID="'leave-' + pane.id" @click="apply(leaveSplit(browser(), pane.id))" />
         </Pressable>
