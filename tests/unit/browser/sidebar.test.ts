@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { displayHost, displayTitle, resolveInput, samePage } from '../../../resources/functions/browser/address'
 import { keyBetween, keysBetween } from '../../../resources/functions/browser/order'
-import { addFavorite, autoArchive, clearToday, closeTab, createFolder, createSpace, createState, deleteSpace, moveItem, openTab, pinTab, reopenClosed, resetTab, rows, selectedTab, selectTab, switchSpace, tabOrder, unpinTab, updateItem } from '../../../resources/functions/browser/sidebar'
+import { addFavorite, autoArchive, clearToday, closeTab, createFolder, createSpace, createState, deleteSpace, leaveSplit, moveItem, openTab, pinTab, reopenClosed, resetTab, rows, selectedTab, selectTab, SPLIT_LIMIT, splitOf, splitTabs, switchSpace, tabOrder, unpinTab, updateItem } from '../../../resources/functions/browser/sidebar'
 
 describe('order keys', () => {
   it('always find a key between two others, in order, however often a row moves', () => {
@@ -190,5 +190,78 @@ describe('the sidebar', () => {
     state = openTab(state, { url: 'https://a.com', title: 'A', id: 'a', now: at(1) }).state
     expect(updateItem(state, 'a', { title: 'A' })).toBe(state)
     expect(closeTab(state, 'missing').state).toBe(state)
+  })
+})
+
+describe('split view', () => {
+  const at = (n: number) => 2_000_000 + n
+  function three() {
+    let state = createState({ id: 's1' })
+    for (const id of ['a', 'b', 'c']) state = openTab(state, { url: `https://${id}.com`, id, place: 'end', now: at(1) }).state
+    return state
+  }
+
+  it('puts two tabs side by side in the first one\'s place, and shows the one that joined', () => {
+    const before = three()
+    const { state, split } = splitTabs(before, 'b', 'c', at(2))
+    expect(split!.kind).toBe('split')
+    const today = rows(state, 'today')
+    expect(today.map(row => row.item.id)).toEqual(['a', split!.id])
+    expect(today[1]!.panes!.map(pane => pane.id)).toEqual(['b', 'c'])
+    expect(splitOf(state, 'c')!.panes.map(pane => pane.id)).toEqual(['b', 'c'])
+    expect(splitOf(state, 'a')).toBeNull()
+    expect(state.selected.s1).toBe('c')
+    expect(tabOrder(state).map(tab => tab.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('adds panes up to four, and refuses favorites and folders', () => {
+    let state = three()
+    for (const id of ['d', 'e']) state = openTab(state, { url: `https://${id}.com`, id, place: 'end', now: at(1) }).state
+    const split = splitTabs(state, 'a', 'b').split!
+    state = splitTabs(state, 'a', 'b').state
+    state = splitTabs(state, 'b', 'c').state
+    state = splitTabs(state, 'c', 'd').state
+    expect(splitOf(state, 'a')!.panes).toHaveLength(SPLIT_LIMIT)
+    expect(splitTabs(state, 'a', 'e').state).toBe(state)
+    expect(moveItem(state, 'e', { inside: splitOf(state, 'a')!.split.id })).toBe(state)
+    expect(split.kind).toBe('split')
+    let favored = addFavorite(three(), 'a')
+    expect(splitTabs(favored, 'a', 'b').split).toBeNull()
+    favored = createFolder(favored, { id: 'f' }).state
+    expect(splitTabs(favored, 'f', 'b').split).toBeNull()
+  })
+
+  it('becomes a plain tab again when one pane is left, whether it closed, left or moved', () => {
+    const base = splitTabs(three(), 'b', 'c').state
+    const splitId = splitOf(base, 'b')!.split.id
+    const order = base.items[splitId]!.order
+
+    const closed = closeTab(base, 'c').state
+    expect(closed.items[splitId]).toBeUndefined()
+    expect(closed.items.b).toMatchObject({ parent: null, order })
+    expect(rows(closed, 'today').map(row => row.item.id)).toEqual(['a', 'b'])
+
+    const left = leaveSplit(base, 'b')
+    expect(left.items[splitId]).toBeUndefined()
+    expect(rows(left, 'today').map(row => row.item.id)).toEqual(['a', 'c', 'b'])
+
+    const pinned = pinTab(base, 'c')
+    expect(pinned.items[splitId]).toBeUndefined()
+    expect(rows(pinned, 'pinned').map(row => row.item.id)).toEqual(['c'])
+
+    const cleared = clearToday(base).state
+    expect(Object.keys(cleared.items)).toEqual([])
+  })
+
+  it('pins as one row, the panes keeping their own addresses, and shows the first pane from its row', () => {
+    let state = splitTabs(three(), 'b', 'c').state
+    const splitId = splitOf(state, 'b')!.split.id
+    state = moveItem(state, splitId, 'start')
+    state = pinTab(state, splitId)
+    expect(rows(state, 'pinned').map(row => row.item.id)).toEqual([splitId])
+    expect(state.items.b!.section).toBe('pinned')
+    expect(state.items.c!.savedUrl).toBe('https://c.com')
+    state = selectTab(state, 'a')
+    expect(selectTab(state, splitId).selected.s1).toBe('b')
   })
 })

@@ -40,7 +40,7 @@ function sample(): BrowserState {
   state = openTab(state, { id: 'mail', url: 'https://mail.example/', section: 'favorites', now: NOW }).state
   state = openTab(state, { id: 'news', url: 'https://news.ycombinator.com/', title: 'Hacker News', now: NOW }).state
   state = openTab(state, { id: 'gh', url: 'https://github.com/', now: NOW }).state
-  return updateItem(state, 'gh', { icon: 'https://github.com/favicon.ico' })
+  return updateItem(state, 'gh', { icon: 'https://github.com/favicon.ico', name: 'Code' })
 }
 
 describe('diffSession', () => {

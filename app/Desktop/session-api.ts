@@ -15,7 +15,7 @@ function isItem(value: unknown): value is Item {
   return isRecord(value) && isString(value.id) && ['tab', 'folder', 'split'].includes(value.kind) && ['favorites', 'pinned', 'today'].includes(value.section)
     && optionalString(value.space) && optionalString(value.parent) && isString(value.order)
     && Number.isFinite(value.createdAt) && Number.isFinite(value.lastActiveAt)
-    && ['title', 'url', 'savedUrl', 'icon'].every(key => optionalString(value[key]))
+    && ['title', 'name', 'url', 'savedUrl', 'icon'].every(key => optionalString(value[key]))
 }
 
 function isSpace(value: unknown): value is Space {
@@ -61,6 +61,12 @@ export function sessionApi(session: () => Session) {
   return {
     /** `GET`: the saved sidebar, or `{ data: null }` before the first save. */
     load: (): Response => json({ data: session().load() }),
+
+    /** `GET ?limit=100`: tabs that left the sidebar, newest first, for the Library. */
+    archived(request: Request): Response {
+      const limit = Math.min(Math.max(Number(new URL(request.url).searchParams.get('limit')) || 100, 1), 500)
+      return json({ data: session().archived(limit).filter(item => item.kind === 'tab' && item.url) })
+    },
 
     /** `PUT` a `SessionChange`: what changed since the last save. */
     async save(request: Request): Promise<Response> {

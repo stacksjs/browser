@@ -59,6 +59,12 @@ export default defineModel({
       default: '',
       validation: { rule: schema.string().max(1024) },
     },
+    /** A name the person gave a tab, shown instead of its page's title. */
+    name: {
+      fillable: true,
+      default: '',
+      validation: { rule: schema.string().max(1024) },
+    },
     url: {
       fillable: true,
       default: '',

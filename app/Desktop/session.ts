@@ -25,6 +25,7 @@ interface ItemRow {
   parent_uid: string
   sort_key: string
   title: string
+  name: string
   url: string
   saved_url: string
   icon: string
@@ -47,6 +48,7 @@ function itemFrom(row: ItemRow): Item {
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
     ...(row.title ? { title: row.title } : {}),
+    ...(row.name ? { name: row.name } : {}),
     ...(row.url ? { url: row.url } : {}),
     ...(row.saved_url ? { savedUrl: row.saved_url } : {}),
     ...(row.icon ? { icon: row.icon } : {}),
@@ -61,10 +63,10 @@ function spaceFrom(row: SpaceRow): Space {
 /** The sidebar over the app's database (`openBrowserDatabase`). */
 export function createSession(db: Database): Session {
   const putItem = db.query(`INSERT INTO sidebar_items
-    (uid, kind, section, space_uid, parent_uid, sort_key, title, url, saved_url, icon, collapsed, created_at, last_active_at, archived_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+    (uid, kind, section, space_uid, parent_uid, sort_key, title, name, url, saved_url, icon, collapsed, created_at, last_active_at, archived_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     ON CONFLICT (uid) DO UPDATE SET kind = excluded.kind, section = excluded.section, space_uid = excluded.space_uid,
-      parent_uid = excluded.parent_uid, sort_key = excluded.sort_key, title = excluded.title, url = excluded.url,
+      parent_uid = excluded.parent_uid, sort_key = excluded.sort_key, title = excluded.title, name = excluded.name, url = excluded.url,
       saved_url = excluded.saved_url, icon = excluded.icon, collapsed = excluded.collapsed,
       last_active_at = excluded.last_active_at, archived_at = 0`)
   const archiveItem = db.query('UPDATE sidebar_items SET archived_at = ? WHERE uid = ? AND archived_at = 0')
@@ -84,7 +86,7 @@ export function createSession(db: Database): Session {
       db.query(`DELETE FROM spaces WHERE uid NOT IN (${kept.map(() => '?').join(', ')})`).run(...kept)
     }
     for (const item of change.put ?? []) {
-      putItem.run(item.id, item.kind, item.section, item.space ?? '', item.parent ?? '', item.order, item.title ?? '', item.url ?? '',
+      putItem.run(item.id, item.kind, item.section, item.space ?? '', item.parent ?? '', item.order, item.title ?? '', item.name ?? '', item.url ?? '',
         item.savedUrl ?? '', item.icon ?? '', item.collapsed ? 1 : 0, item.createdAt, item.lastActiveAt)
     }
     for (const id of change.remove ?? []) archiveItem.run(now, id)

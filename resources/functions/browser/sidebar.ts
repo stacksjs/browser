@@ -48,6 +48,8 @@ export interface Item {
   /** Sorts it among its siblings (see order.ts). */
   order: string
   title?: string
+  /** A name the person gave a tab, shown instead of its page's title. */
+  name?: string
   url?: string
   /** Where a pinned tab or a favorite returns to when it is reset. */
   savedUrl?: string
@@ -195,8 +197,11 @@ export function openTab(state: BrowserState, options: OpenOptions): { state: Bro
 
 /** Show a tab: its space becomes the active one (a favorite stays in the current space). */
 export function selectTab(state: BrowserState, id: string, now = Date.now()): BrowserState {
-  const item = state.items[id]
+  let item = state.items[id]
+  // A split view's row shows its first pane, with the others beside it.
+  if (item?.kind === 'split') item = childrenOf(state, { section: item.section, space: item.space, parent: item.id })[0]
   if (!item || item.kind === 'folder') return state
+  id = item.id
   const space = item.space ?? state.activeSpace
   return update(state, { [id]: { ...item, lastActiveAt: now } }, { activeSpace: space, selected: { ...state.selected, [space]: id } })
 }
@@ -221,7 +226,7 @@ export function closeTab(state: BrowserState, id: string): { state: BrowserState
   const selected = state.selected[space] === id ? { ...state.selected, [space]: neighbour(state, id) } : state.selected
   if (item.section !== 'today') return { state: { ...state, selected }, removed: false }
   const closed = [...state.closed, item].slice(-CLOSED_LIMIT)
-  return { state: update(state, { [id]: null }, { selected, closed }), removed: true }
+  return { state: dissolveLoneSplits(update(state, { [id]: null }, { selected, closed })), removed: true }
 }
 
 /** The most recently closed tab, back where it was if its list still exists, else first in Today. */
@@ -260,17 +265,32 @@ export function moveItem(state: BrowserState, id: string, place: Place): Browser
   const list = typeof place === 'string' ? { section: item.section, space: item.space, parent: item.parent } : undefined
   const landing = resolvePlace(state, place, list ?? { section: item.section, space: item.space, parent: null }, id)
   if (landing.section === 'favorites' && item.kind !== 'tab') return state
+  const into = landing.parent ? state.items[landing.parent] : null
+  if (into?.kind === 'split' && (item.kind !== 'tab' || (item.parent !== into.id && childrenOf(state, { ...landing, parent: into.id }).length >= SPLIT_LIMIT))) return state
+  if (item.kind === 'split' && landing.parent) return state
   const moved: Item = { ...item, ...landing }
   if (landing.section !== 'today' && item.section === 'today' && moved.kind === 'tab') moved.savedUrl = moved.url
   if (landing.section === 'today') delete moved.savedUrl
-  // A folder carries what is inside it into its new list.
-  const changes: Record<string, Item | null> = { [id]: moved }
-  if (item.kind !== 'tab' && (landing.section !== item.section || landing.space !== item.space)) {
-    for (const child of Object.values(state.items)) {
-      if (child.id !== id && within(state, child.id, id)) changes[child.id] = { ...child, section: landing.section, space: landing.space }
-    }
+  const next = update(state, withContents(state, moved))
+  return item.parent && state.items[item.parent]?.kind === 'split' && landing.parent !== item.parent ? dissolveLoneSplits(next) : next
+}
+
+/**
+ * A moved row, and what a folder or split view holds following it into its
+ * new list. Tabs crossing the line gain or lose their saved address with it.
+ */
+function withContents(state: BrowserState, moved: Item): Record<string, Item | null> {
+  const item = state.items[moved.id]!
+  const changes: Record<string, Item | null> = { [moved.id]: moved }
+  if (item.kind === 'tab' || (moved.section === item.section && moved.space === item.space)) return changes
+  for (const child of Object.values(state.items)) {
+    if (child.id === moved.id || !within(state, child.id, moved.id)) continue
+    const carried: Item = { ...child, section: moved.section, space: moved.space }
+    if (moved.section !== 'today' && child.section === 'today' && child.kind === 'tab') carried.savedUrl = child.url
+    if (moved.section === 'today') delete carried.savedUrl
+    changes[child.id] = carried
   }
-  return update(state, changes)
+  return changes
 }
 
 export const pinTab = (state: BrowserState, id: string): BrowserState => {
@@ -291,9 +311,10 @@ function moveToList(state: BrowserState, id: string, list: { section: Section, s
   const siblings = childrenOf(state, { ...list, parent: null }).filter(other => other.id !== id)
   if (!siblings.length) {
     const moved: Item = { ...item, section: list.section, space: list.section === 'favorites' ? null : list.space, parent: null, order: keyBetween(null, null) }
-    if (list.section !== 'today' && item.section === 'today') moved.savedUrl = item.url
+    if (list.section !== 'today' && item.section === 'today' && moved.kind === 'tab') moved.savedUrl = item.url
     if (list.section === 'today') delete moved.savedUrl
-    return update(state, { [id]: moved })
+    const next = update(state, withContents(state, moved))
+    return item.parent && state.items[item.parent]?.kind === 'split' ? dissolveLoneSplits(next) : next
   }
   return moveItem(state, id, at === 'start' ? { before: siblings[0]!.id } : { after: siblings.at(-1)!.id })
 }
@@ -306,12 +327,104 @@ export function createFolder(state: BrowserState, options: { title?: string, spa
   return { state: update(state, { [folder.id]: folder }), folder }
 }
 
+// Split view
+
+/** The most tabs one split view shows side by side, as in Arc. */
+export const SPLIT_LIMIT = 4
+
+/** The split view holding a tab and its panes in order; null for a tab on its own. */
+export function splitOf(state: BrowserState, id: string): { split: Item, panes: Item[] } | null {
+  const parent = state.items[id]?.parent
+  const split = parent ? state.items[parent] : undefined
+  if (!split || split.kind !== 'split') return null
+  return { split, panes: childrenOf(state, { section: split.section, space: split.space, parent: split.id }) }
+}
+
+/**
+ * Arc's split view: `other` opens beside `id`. A new split view takes `id`'s
+ * place in its list and `other` leaves its own; when `id` is already in one,
+ * `other` joins it, up to `SPLIT_LIMIT`. Favorites and folders never split.
+ * The pane that joined is shown.
+ */
+export function splitTabs(state: BrowserState, id: string, other: string, now = Date.now()): { state: BrowserState, split: Item | null } {
+  const a = state.items[id]
+  const b = state.items[other]
+  if (!a || !b || id === other || a.kind !== 'tab' || b.kind !== 'tab' || a.section === 'favorites' || b.section === 'favorites') return { state, split: null }
+  const existing = splitOf(state, id)
+  if (existing) {
+    if (existing.panes.some(pane => pane.id === other)) return { state: selectTab(state, other, now), split: existing.split }
+    if (existing.panes.length >= SPLIT_LIMIT) return { state, split: existing.split }
+    const next = selectTab(moveItem(state, other, { inside: existing.split.id }), other, now)
+    return { state: next, split: next.items[existing.split.id]! }
+  }
+  const split: Item = { id: newId(), kind: 'split', section: a.section, space: a.space, parent: a.parent, order: a.order, createdAt: now, lastActiveAt: now }
+  // `id` gives its place to the split, so its own key is free to change.
+  let next = update(state, { [split.id]: split, [id]: { ...a, parent: split.id, order: keyBetween(null, null) } })
+  next = moveItem(next, other, { inside: split.id })
+  next = selectTab(next, other, now)
+  return { state: next, split: next.items[split.id]! }
+}
+
+/** A pane back on its own, just below its split view, which goes when one tab is left. */
+export function leaveSplit(state: BrowserState, id: string): BrowserState {
+  const found = splitOf(state, id)
+  return found ? moveItem(state, id, { after: found.split.id }) : state
+}
+
+/**
+ * A split view with one tab left becomes that tab, in the split's place; an
+ * empty one goes. Nothing changes (the same state comes back) when every split
+ * still holds two.
+ */
+function dissolveLoneSplits(state: BrowserState): BrowserState {
+  const changes: Record<string, Item | null> = {}
+  for (const split of Object.values(state.items)) {
+    if (split.kind !== 'split') continue
+    const panes = childrenOf(state, { section: split.section, space: split.space, parent: split.id })
+    if (panes.length > 1) continue
+    changes[split.id] = null
+    const pane = panes[0]
+    if (pane) changes[pane.id] = { ...pane, parent: split.parent, order: split.order, section: split.section, space: split.space }
+  }
+  return Object.keys(changes).length ? update(state, changes) : state
+}
+
 /** A row's own fields: a tab's title, address and icon as its page reports them, a folder's name, a folder opening. */
-export function updateItem(state: BrowserState, id: string, fields: Partial<Pick<Item, 'title' | 'url' | 'icon' | 'collapsed'>>): BrowserState {
+export function updateItem(state: BrowserState, id: string, fields: Partial<Pick<Item, 'title' | 'name' | 'url' | 'icon' | 'collapsed'>>): BrowserState {
   const item = state.items[id]
   if (!item) return state
   const changed = (Object.keys(fields) as Array<keyof typeof fields>).some(key => item[key] !== fields[key])
-  return changed ? update(state, { [id]: { ...item, ...fields } }) : state
+  if (!changed) return state
+  const next: Item = { ...item, ...fields }
+  // An empty name gives the row its page's title back.
+  if (!next.name) delete next.name
+  return update(state, { [id]: next })
+}
+
+/**
+ * Renaming a row: a folder's title, or a tab's own name (its page's title no
+ * longer shows). An empty name puts the page's title back.
+ */
+export function renameItem(state: BrowserState, id: string, name: string): BrowserState {
+  const item = state.items[id]
+  if (!item) return state
+  const text = name.trim()
+  if (item.kind === 'folder') return text ? updateItem(state, id, { title: text }) : state
+  return updateItem(state, id, { name: text })
+}
+
+/** A folder goes; what it held takes its place, in order. */
+export function ungroupFolder(state: BrowserState, id: string): BrowserState {
+  const folder = state.items[id]
+  if (!folder || folder.kind !== 'folder') return state
+  const children = childrenOf(state, { section: folder.section, space: folder.space, parent: id })
+  let next = state
+  let anchor = id
+  for (const child of children) {
+    next = moveItem(next, child.id, { after: anchor })
+    anchor = child.id
+  }
+  return update(next, { [id]: null })
 }
 
 /** A pinned tab or favorite back at its saved address. */
@@ -338,7 +451,7 @@ function archive(state: BrowserState, tabs: Item[]): { state: BrowserState, arch
   const gone = new Set(tabs.map(tab => tab.id))
   const selected = Object.fromEntries(Object.entries(state.selected).map(([space, id]) => [space, id && gone.has(id) ? null : id]))
   const changes = Object.fromEntries(tabs.map(tab => [tab.id, null]))
-  return { state: update(state, changes, { selected }), archived: tabs }
+  return { state: dissolveLoneSplits(update(state, changes, { selected })), archived: tabs }
 }
 
 // Spaces
