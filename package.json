@@ -63,7 +63,8 @@
     "stacks": "^0.75.404",
     "@stacksjs/env": "^0.75.404",
     "@stacksjs/path": "^0.75.404",
-    "@stacksjs/actions": "^0.75.404"
+    "@stacksjs/actions": "^0.75.404",
+    "very-good-adblock": "^0.3.5"
   },
   "workspaces": [
     "storage/framework",

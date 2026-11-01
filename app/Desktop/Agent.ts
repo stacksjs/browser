@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { response, route } from '@stacksjs/router'
 import desktop from '../../config/desktop'
 import { arcApi } from './arc'
+import { blockerApi } from './blocker'
 import { boostsApi, createBoosts } from './boosts'
 import type { Boosts } from './boosts'
 import { openBrowserDatabase } from './database'
@@ -42,6 +43,8 @@ const database = () => (db ??= openBrowserDatabase(join(dataDir, 'Browser.sqlite
 const suggestRoutes = suggestApi(createSuggestions())
 const siteRoutes = sitesApi(() => (sites ??= createSites(database())))
 const arcRoutes = arcApi(() => (history ??= createHistory(database())))
+// very-good-adblock loads on the first request, so launch never waits for its rules.
+const blockerRoutes = blockerApi(() => import('very-good-adblock'))
 const boostRoutes = boostsApi(() => (boosts ??= createBoosts(database())))
 const downloadRoutes = downloadsApi(() => (downloads ??= createDownloads(database())))
 const historyRoutes = historyApi(() => (history ??= createHistory(database())))
@@ -68,6 +71,8 @@ route.get('/api/sites', () => siteRoutes.all())
 route.put('/api/sites', request => siteRoutes.save(request)).skipCsrf()
 route.get('/api/import/arc', () => arcRoutes.preview())
 route.post('/api/import/arc', () => arcRoutes.run()).skipCsrf()
+route.get('/api/blocker', request => blockerRoutes.manifest(request))
+route.get('/api/blocker/list', request => blockerRoutes.list(request))
 route.get('/api/boosts', () => boostRoutes.all())
 route.put('/api/boosts', request => boostRoutes.save(request)).skipCsrf()
 route.delete('/api/boosts', request => boostRoutes.remove(request)).skipCsrf()
