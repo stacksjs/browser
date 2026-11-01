@@ -56,7 +56,8 @@
     "bud": "./buddy",
     "probe:integrations": "./buddy integrations:probe",
     "dev:desktop": "./buddy dev:desktop",
-    "build:desktop": "./buddy build:desktop"
+    "build:desktop": "./buddy build:desktop",
+    "test:window": "./buddy build:desktop && BROWSER_WINDOW_TESTS=1 bun test tests/window"
   },
   "dependencies": {
     "@stacksjs/stx": "0.2.779",

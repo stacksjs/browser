@@ -471,6 +471,8 @@ function showing() {
 /** A tab another window shows, brought here: that window lets it go, and this one shows it. */
 function takeTab(id) {
   craft.desktop.post({ type: 'take', tab: id })
+  // The page exists in the host already: this window takes it as it is.
+  pages.adopt(id)
   const next = {}
   for (const [name, tabs] of Object.entries(elsewhere())) next[name] = tabs.filter(each => each !== id)
   elsewhere.set(next)
