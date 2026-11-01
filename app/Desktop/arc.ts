@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import type { ArcImportReport } from '../../resources/functions/browser/arc-import'
 import { chromiumTime, importArcSidebar } from '../../resources/functions/browser/arc-import'
 import type { BrowserState } from '../../resources/functions/browser/sidebar'
+import type { ArcCookieCount, ArcCookies } from './arc-cookies'
+import { arcSafeStorageSecret, countArcCookies, readArcCookies } from './arc-cookies'
 import type { History, ImportedPage } from './history'
 
 /**
@@ -21,6 +23,8 @@ export interface ArcPreview {
   found: boolean
   report?: ArcImportReport
   historyPages?: number
+  /** Sign-ins that keeping them would bring, counted without reading the Keychain. */
+  signIns?: ArcCookieCount
 }
 
 export function arcDirectory(): string {
@@ -57,9 +61,15 @@ function historyPages(file: string): ImportedPage[] {
 export function previewArc(dir = arcDirectory()): ArcPreview {
   const found = copies(dir)
   try {
-    if (!found.sidebar && !found.history) return { found: false }
+    const signIns = countArcCookies(dir)
+    if (!found.sidebar && !found.history && !signIns.cookies) return { found: false }
     const report = found.sidebar ? importArcSidebar(JSON.parse(readFileSync(found.sidebar, 'utf8'))).report : undefined
-    return { found: true, ...(report ? { report } : {}), ...(found.history ? { historyPages: historyPages(found.history).length } : {}) }
+    return {
+      found: true,
+      ...(report ? { report } : {}),
+      ...(found.history ? { historyPages: historyPages(found.history).length } : {}),
+      ...(signIns.cookies ? { signIns } : {}),
+    }
   }
   finally { found.done() }
 }
@@ -75,8 +85,8 @@ export function importArc(history: History, dir = arcDirectory()): { state: Brow
   finally { found.done() }
 }
 
-/** `GET /api/import/arc` previews; `POST` imports. */
-export function arcApi(history: () => History, dir?: () => string) {
+/** `GET /api/import/arc` previews; `POST` imports; `POST /api/import/arc/cookies` reads the sign-ins (the Keychain asks first). */
+export function arcApi(history: () => History, dir?: () => string, secret: () => Promise<string> = arcSafeStorageSecret) {
   const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'cache-control': 'no-store' } })
   return {
     preview(): Response {
@@ -86,6 +96,13 @@ export function arcApi(history: () => History, dir?: () => string) {
     run(): Response {
       try { return json({ data: importArc(history(), dir?.()) }) }
       catch (error) { return json({ error: `Arc's data could not be read: ${(error as Error).message}` }, 500) }
+    },
+    async cookies(): Promise<Response> {
+      let key: string
+      try { key = await secret() }
+      catch (error) { return json({ error: (error as Error).message }, 403) }
+      try { return json({ data: readArcCookies(dir?.() ?? arcDirectory(), key) satisfies ArcCookies }) }
+      catch (error) { return json({ error: `Arc's sign-ins could not be read: ${(error as Error).message}` }, 500) }
     },
   }
 }

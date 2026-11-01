@@ -39,9 +39,50 @@ export const SETTLE_IN_TIPS = [
   { keys: '⌃1-9', title: 'Switch spaces', detail: 'Each space has its own tabs, colours and profile.' },
 ]
 
+/** Arc's sign-ins as the agent reads them (app/Desktop/arc-cookies.ts). */
+export interface ArcSignIns {
+  profiles: Array<{ profile: string, cookies: Array<{ name: string, value: string, domain: string }> }>
+  skipped: number
+}
+
 export interface ImportClient {
-  preview: () => Promise<{ found: boolean, report?: ArcImportReport, historyPages?: number }>
+  preview: () => Promise<{ found: boolean, report?: ArcImportReport, historyPages?: number, signIns?: { cookies: number, sites: number } }>
   run: () => Promise<{ state: BrowserState | null, report: ArcImportReport | null, historyImported: number } | null>
+  /** Arc's sign-ins, once the person allows the Keychain prompt; an error says why not. */
+  signIns: () => Promise<{ data?: ArcSignIns, error?: string }>
+}
+
+/** The part of `craft.web` that keeping sign-ins uses. */
+export interface CookieStore {
+  setCookies: (options: { profile: string, cookies: ArcSignIns['profiles'][number]['cookies'] }) => Promise<{ set: number, skipped: number }>
+}
+
+/**
+ * Hands Arc's sign-ins to WebKit, one profile's store at a time, for the
+ * profiles this browser's spaces use (Arc's other profiles have no space to be
+ * signed in from). Resolves how many cookies were kept and for how many sites.
+ */
+export async function keepSignedIn(signIns: ArcSignIns, store: CookieStore, profiles: string[]): Promise<{ cookies: number, sites: number }> {
+  const wanted = new Set([...profiles, 'default'])
+  const sites = new Set<string>()
+  let cookies = 0
+  for (const each of signIns.profiles) {
+    if (!wanted.has(each.profile)) continue
+    const result = await store.setCookies({ profile: each.profile, cookies: each.cookies })
+    cookies += result.set
+    for (const cookie of each.cookies) sites.add(cookie.domain.replace(/^\./, ''))
+  }
+  return { cookies, sites: cookies ? sites.size : 0 }
+}
+
+/** The offer, before anything is read: the Keychain prompt is the person's to allow. */
+export function signInOffer(count: { sites: number }): string {
+  return `Stay signed in to ${plural(count.sites, 'site')}? macOS asks you to allow reading Arc's sign-ins from your Keychain.`
+}
+
+/** "You stay signed in to 42 sites." */
+export function signInSummary(kept: { sites: number }): string {
+  return kept.sites ? `You stay signed in to ${plural(kept.sites, 'site')}.` : 'Arc had no sign-ins to keep.'
 }
 
 export function createImportClient(options: { base: string, fetch?: (input: string, init?: RequestInit) => Promise<Response> }): ImportClient {
@@ -61,6 +102,14 @@ export function createImportClient(options: { base: string, fetch?: (input: stri
         return response.ok ? ((await response.json()) as { data: any }).data : null
       }
       catch { return null }
+    },
+    async signIns() {
+      try {
+        const response = await send(`${base}/api/import/arc/cookies`, { method: 'POST' })
+        const body = await response.json() as { data?: ArcSignIns, error?: string }
+        return response.ok && body.data ? { data: body.data } : { error: body.error || 'Arc\'s sign-ins could not be read.' }
+      }
+      catch { return { error: 'Arc\'s sign-ins could not be read.' } }
     },
   }
 }

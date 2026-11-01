@@ -9,7 +9,7 @@ import { createBlocker } from '../functions/browser/blocker'
 import { boostScripts, createBoostClient, newBoost, ZAP_SCRIPT, zapReadScript } from '../functions/browser/boosts'
 import { addSpace, rowMenu, runRowAction, runSpaceAction, spaceMenu } from '../functions/browser/menus'
 import { mergeImported } from '../functions/browser/arc-import'
-import { createImportClient, importSummary, nextStep, SETTLE_IN_TIPS } from '../functions/browser/onboarding'
+import { createImportClient, importSummary, keepSignedIn, nextStep, SETTLE_IN_TIPS, signInOffer, signInSummary } from '../functions/browser/onboarding'
 import { createPages } from '../functions/browser/pages'
 import { shouldPeek } from '../functions/browser/peek'
 import { rank } from '../functions/browser/rank'
@@ -98,6 +98,8 @@ const onboarding = state(!isPrivate && craft.storage.getSync('browser.onboarded'
 const arcPreview = state(null)
 const importing = state(false)
 const imported = state('')
+const keepingSignIns = state(false)
+const signedIn = state('')
 const shownBoost = derived(() => (shownSite() ? boosts().find(boost => boost.host === shownSite().host) ?? null : null))
 const boostEditor = state(false)
 const zapping = state(false)
@@ -519,6 +521,17 @@ async function importArc() {
   if (!result) return imported.set('Arc\'s data could not be read.')
   if (result.state) apply(mergeImported(browser(), result.state))
   imported.set('Brought over ' + importSummary(result.report || undefined, result.historyImported) + '.')
+}
+/** Arc's sign-ins into each profile's WebKit store; macOS asks before the agent can read them. */
+async function keepArcSignIns() {
+  keepingSignIns.set(true)
+  const result = await importClient.signIns()
+  if (result.data) {
+    const kept = await keepSignedIn(result.data, craft.web, browser().spaces.map(each => each.profile)).catch(() => null)
+    signedIn.set(kept ? signInSummary(kept) : 'WebKit did not take Arc\'s sign-ins.')
+  }
+  else signedIn.set(result.error)
+  keepingSignIns.set(false)
 }
 function pickTheme(preset) {
   apply(updateSpace(browser(), space().id, { theme: themeFromColors(preset.colors) }))
@@ -967,6 +980,8 @@ onMount(() => {
         <View :if="onboarding() === 'import'" class="gap-[10px]">
           <Text class="text-[#4a4d6b] text-[15px]">{{ !arcPreview() ? 'Looking for Arc…' : arcPreview().found ? 'Found in Arc: ' + importSummary(arcPreview().report, arcPreview().historyPages) + '. Arc\'s files are only read, never changed.' : 'Arc is not on this Mac, so there is nothing to bring over.' }}</Text>
           <Text :if="imported()" class="font-semibold text-[#1f8a4c] text-[14px]">{{ imported() }}</Text>
+          <Text :if="arcPreview() && arcPreview().signIns && !signedIn()" class="text-[#4a4d6b] text-[14px]">{{ signInOffer(arcPreview().signIns) }}</Text>
+          <Text :if="signedIn()" class="font-semibold text-[#1f8a4c] text-[14px]" testID="onboarding-signed-in">{{ signedIn() }}</Text>
         </View>
 
         <View :if="onboarding() === 'theme'" class="flex-row flex-wrap gap-[10px]">
@@ -984,6 +999,7 @@ onMount(() => {
 
         <View class="flex-row gap-[10px] pt-[8px]">
           <Button :if="onboarding() === 'import' && arcPreview() && arcPreview().found && !imported()" :title="importing() ? 'Importing…' : 'Import from Arc'" variant="primary" :disabled="importing()" testID="onboarding-import" @click="importArc()" />
+          <Button :if="onboarding() === 'import' && arcPreview() && arcPreview().signIns && !signedIn()" :title="keepingSignIns() ? 'Waiting for the Keychain…' : 'Keep Me Signed In'" variant="secondary" :disabled="keepingSignIns()" testID="onboarding-cookies" @click="keepArcSignIns()" />
           <Button :if="onboarding() === 'default'" title="Make Default Browser" variant="primary" testID="onboarding-default" @click="onboardDefault()" />
           <Button :title="onboarding() === 'welcome' ? 'Get Started' : onboarding() === 'done' ? 'Start Browsing' : onboarding() === 'import' && !imported() && arcPreview() && arcPreview().found ? 'Skip' : onboarding() === 'default' ? 'Not Now' : 'Continue'" :variant="onboarding() === 'welcome' || onboarding() === 'done' || onboarding() === 'theme' || (onboarding() === 'import' && (imported() || (arcPreview() && !arcPreview().found))) ? 'primary' : 'secondary'" testID="onboarding-next" @click="advanceOnboarding()" />
         </View>
