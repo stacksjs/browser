@@ -90,9 +90,9 @@ function serveAgent(db: Database) {
 
 const run = async (command: string[]) => { await Bun.spawn(command, { stdout: 'ignore', stderr: 'ignore' }).exited }
 
-/** Opens the browser over a sidebar `seed` builds from fixture page addresses. */
-export async function openBrowser(seed: (page: (name: string) => string) => BrowserState): Promise<Browser> {
-  const built = builtHost()
+/** Opens the browser over a sidebar `seed` builds from fixture page addresses; `build` picks a host other than the newest, `log` keeps the host's stderr. */
+export async function openBrowser(seed: (page: (name: string) => string) => BrowserState, options: { build?: { host: string, bundle: string }, log?: string } = {}): Promise<Browser> {
+  const built = options.build ?? builtHost()
   if (!built) throw new Error('No host build: run `./buddy build:desktop` first.')
   const temp = mkdtempSync(join(tmpdir(), 'browser-window-test-'))
   const settings = join(temp, 'defaults.plist')
@@ -106,7 +106,7 @@ export async function openBrowser(seed: (page: (name: string) => string) => Brow
   createSession(db).save(diffSession(null, seed(name => page(name)))!)
 
   const test = join(temp, 'test')
-  const host = Bun.spawn([built.host, '--no-session', '--api-url', `http://127.0.0.1:${server.port}`, '--native-bundle', built.bundle, '--title', 'Browser', '--titlebar-style', 'transparent', '--traffic-lights', '18,15', '--width', '1200', '--height', '800', '--test-dir', test], { stdout: 'ignore', stderr: 'ignore' })
+  const host = Bun.spawn([built.host, '--no-session', '--api-url', `http://127.0.0.1:${server.port}`, '--native-bundle', built.bundle, '--title', 'Browser', '--titlebar-style', 'transparent', '--traffic-lights', '18,15', '--width', '1200', '--height', '800', '--test-dir', test], { stdout: 'ignore', stderr: options.log ? Bun.file(options.log) : 'ignore' })
   const deadline = Date.now() + 20_000
   while (!existsSync(join(test, 'state.json'))) {
     if (Date.now() > deadline) throw new Error('The host did not start')
