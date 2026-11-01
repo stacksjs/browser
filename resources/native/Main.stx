@@ -13,16 +13,26 @@ import { createImportClient, importSummary, keepSignedIn, nextStep, SETTLE_IN_TI
 import { createPages } from '../functions/browser/pages'
 import { shouldPeek } from '../functions/browser/peek'
 import { rank } from '../functions/browser/rank'
-import { createSessionClient } from '../functions/browser/session'
+import { createSessionClient, diffSession } from '../functions/browser/session'
 import { archiveAfterMs, readSettings } from '../functions/browser/settings'
 import { THEME_PRESETS, themeFromColors } from '../functions/browser/theme'
 import { createSitesClient, decide, permissionWords, remember, settingsFor, siteKey, stepZoom, unblockedHosts } from '../functions/browser/sites'
 import { createSuggestionClient } from '../functions/browser/suggestions'
+import { applySharedChange, sharedChange, shownElsewhere, snapshot, windowMessage, withView } from '../functions/browser/windows'
 import { addFavorite, autoArchive, clearToday, closeTab, createState, newId, leaveSplit, moveItem, openTab, pinTab, renameItem, reopenClosed, rows, selectTab, splitOf, splitTabs, switchSpace, tabOrder, unpinTab, updateItem, updateSpace } from '../functions/browser/sidebar'
 
 const web = craft.web
 // A private window keeps nothing: no saved sidebar, no history, pages in a store that never touches disk.
 const isPrivate = Boolean(craft.route && craft.route.params && craft.route.params.private)
+// A window opened with ⌘N shares the main window's sidebar (windows.ts). Only the main window saves
+// which space and tab it shows, takes links from other apps, and adopts the Little window's pages.
+const isExtraWindow = Boolean(craft.route && craft.route.params && craft.route.params.window)
+let savedView = null
+// Tabs the other windows show, by window: a page can be in one window at a time.
+const elsewhere = state({})
+const elsewhereTabs = derived(() => shownElsewhere(elsewhere()))
+// Other windows' changes that arrived before this one had loaded the sidebar.
+const waitingChanges = []
 const PRIVATE_THEME = {
   light: { background: '#3b2f63', backgroundTo: '#241c42', foreground: '#f1edff', hover: '#ffffff1a', selected: '#ffffff2e' },
   dark: { background: '#2a2147', backgroundTo: '#18122e', foreground: '#f1edff', hover: '#ffffff1a', selected: '#ffffff2e' },
@@ -94,7 +104,7 @@ const boostClient = createBoostClient({ base: craft.app.url || '' })
 const boosts = state([])
 // First launch: a few steps over the window (onboarding.ts).
 const importClient = createImportClient({ base: craft.app.url || '' })
-const onboarding = state(!isPrivate && craft.storage.getSync('browser.onboarded') !== true ? 'welcome' : null)
+const onboarding = state(!isPrivate && !isExtraWindow && craft.storage.getSync('browser.onboarded') !== true ? 'welcome' : null)
 const arcPreview = state(null)
 const importing = state(false)
 const imported = state('')
@@ -172,8 +182,17 @@ effect(() => {
 
 function apply(next) {
   if (next === browser()) return
+  const change = isPrivate ? null : sharedChange(diffSession(browser(), next))
   browser.set(next)
-  if (persisting) sessionClient.save(next)
+  if (persisting) sessionClient.save(isExtraWindow && savedView ? withView(next, savedView) : next)
+  if (change) craft.desktop.post({ type: 'sidebar', change })
+}
+/** Another window's sidebar change: applied here and counted as saved, because that window saves it. */
+function applyRemote(change, replace) {
+  if (!restored()) return waitingChanges.push([change, replace])
+  const update = current => applySharedChange(current, change, { replace })
+  sessionClient.acknowledge(update)
+  browser.set(update(browser()))
 }
 
 /**
@@ -193,15 +212,24 @@ async function restore() {
     persisting = true
   }
   catch (error) { console.error('Browser: the sidebar could not be loaded; changes this run are not kept.', error) }
-  const legacy = saved ? null : craft.storage.getSync('browser.sidebar')
+  const legacy = saved || isExtraWindow ? null : craft.storage.getSync('browser.sidebar')
   browser.set(saved ?? (legacy && legacy.spaces ? legacy : browser()))
+  if (isExtraWindow) {
+    // This window starts in the opener's space with no tab picked; the saved view stays the main window's.
+    savedView = { activeSpace: browser().activeSpace, selected: browser().selected }
+    const wanted = craft.route.params.space
+    const start = browser().spaces.some(each => each.id === wanted) ? wanted : browser().activeSpace
+    browser.set({ ...browser(), activeSpace: start, selected: { ...browser().selected, [start]: null } })
+  }
   restored.set(true)
-  if (persisting && !saved) {
+  for (const [change, replace] of waitingChanges.splice(0)) applyRemote(change, replace)
+  craft.desktop.post({ type: 'hello' })
+  if (persisting && !saved && !isExtraWindow) {
     sessionClient.save(browser())
     if (await sessionClient.flush() && legacy) craft.storage.remove('browser.sidebar')
   }
   // A first launch waits for onboarding, whose import may fill the sidebar.
-  if (!Object.keys(browser().items).length && !onboarding()) openCommand('new')
+  if ((isExtraWindow || !Object.keys(browser().items).length) && !onboarding()) openCommand('new')
 }
 
 // Pages wait for the blocker's lists (WebKit has them compiled from an earlier
@@ -211,7 +239,7 @@ setTimeout(() => blockerReady.set(true), 1500)
 effect(() => {
   if (!blockerReady()) return
   for (const tab of panes()) {
-    if (tab.kind === 'tab' && tab.url) pages.show(tab, space().profile)
+    if (tab.kind === 'tab' && tab.url && !elsewhereTabs().has(tab.id)) pages.show(tab, space().profile)
   }
 })
 
@@ -413,16 +441,52 @@ function openLittle(url) {
 function openSettings() {
   craft.desktop.openWindow({ name: 'settings', route: 'Settings', title: 'Settings', titlebarStyle: 'transparent', width: 620, height: 640, minWidth: 520, minHeight: 480, trafficLights: [16, 16] })
 }
-/** Another window says something: the Little window hands over its page, or settings changed. */
-function onWindowMessage(message) {
+/** Another window says something: the sidebar changed, it shows tabs, the Little window hands over a page, or settings changed. */
+function onWindowMessage(message, from) {
   if (!message || typeof message !== 'object' || isPrivate) return
-  if (message.type === 'adopt' && typeof message.tab === 'string') {
+  const shared = windowMessage(message)
+  if (shared && shared.type === 'sidebar') applyRemote(shared.change, shared.replace === true)
+  if (shared && shared.type === 'hello') {
+    craft.desktop.post({ type: 'showing', tabs: showing() })
+    if (restored()) craft.desktop.post({ type: 'sidebar', change: snapshot(browser()), replace: true })
+  }
+  if (shared && shared.type === 'showing') elsewhere.set({ ...elsewhere(), [from]: shared.tabs })
+  if (shared && shared.type === 'take' && showing().includes(shared.tab)) {
+    // The other window shows it from now on; this one draws the card instead.
+    pages.forget(shared.tab)
+    elsewhere.set({ ...elsewhere(), [from]: [...(elsewhere()[from] || []), shared.tab] })
+  }
+  if (message.type === 'adopt' && typeof message.tab === 'string' && !isExtraWindow) {
     apply(openTab(browser(), { id: message.tab, url: message.url || 'about:blank', title: message.title || undefined }).state)
     pages.adopt(message.tab)
     // Once this window shows it, the tab is this window's, and the small one may close.
     setTimeout(() => craft.desktop.post({ type: 'adopted', tab: message.tab }), 200)
   }
   if (message.type === 'settings') applySettings(readSettings(key => craft.storage.getSync(key)))
+}
+/** Tabs this window draws a page for. */
+function showing() {
+  return [...panes().map(pane => pane.id), ...(peek() ? [peek().tab] : [])].filter(id => !elsewhereTabs().has(id))
+}
+/** A tab another window shows, brought here: that window lets it go, and this one shows it. */
+function takeTab(id) {
+  craft.desktop.post({ type: 'take', tab: id })
+  const next = {}
+  for (const [name, tabs] of Object.entries(elsewhere())) next[name] = tabs.filter(each => each !== id)
+  elsewhere.set(next)
+}
+/** A window closed, and Craft closed its pages: forget them here so showing them again makes new ones. */
+async function onWindowClosed(name) {
+  const next = { ...elsewhere() }
+  delete next[name]
+  elsewhere.set(next)
+  const live = await web.list().catch(() => null)
+  if (live) pages.prune(new Set(live.map(page => page.tab)))
+}
+async function openNewWindow() {
+  // The new window loads the sidebar from the agent, so what is waiting goes first.
+  await sessionClient.flush()
+  craft.desktop.openWindow({ name: 'window-' + Date.now().toString(36), route: 'Main', title: 'Browser', titlebarStyle: 'transparent', width: 1180, height: 780, minWidth: 900, minHeight: 560, trafficLights: [18, 15], params: { window: true, space: browser().activeSpace } })
 }
 function applySettings(next) {
   const before = settings()
@@ -659,6 +723,7 @@ const commands = {
   'find-next': () => (finding() ? findNext(false) : openFind()),
   'find-previous': () => (finding() ? findNext(true) : openFind()),
   'site-controls': () => shownSite() && siteControls.set(!siteControls()),
+  'new-window': () => openNewWindow(),
   'new-private-window': () => openPrivateWindow(),
   'little-arc': () => openLittle(''),
   'settings': () => openSettings(),
@@ -699,7 +764,16 @@ onMount(() => {
   if (!isPrivate) craft.desktop.onQuit?.(() => Promise.all([sessionClient.flush(), historyClient.flush()]))
   web.on('permission', onPermission)
   craft.desktop.onMessage(onWindowMessage)
-  if (!isPrivate) {
+  craft.desktop.onWindowClosed?.(onWindowClosed)
+  // Which tabs this window shows, whenever that changes, so the others draw a card for them.
+  let shownBefore = ''
+  effect(() => {
+    const tabs = showing()
+    if (isPrivate || tabs.join() === shownBefore) return
+    shownBefore = tabs.join()
+    craft.desktop.post({ type: 'showing', tabs })
+  })
+  if (!isPrivate && !isExtraWindow) {
     craft.desktop.onOpenURL(urls => urls.forEach(openExternal))
     craft.desktop.takeOpenedURLs().then(urls => urls.forEach(openExternal)).catch(() => {})
   }
@@ -749,7 +823,8 @@ onMount(() => {
   }, 5 * 60_000)
   // Pages left unseen go to sleep; their rows stay.
   setInterval(() => {
-    const visible = new Set(shownId() ? [shownId()] : [])
+    // A page another window shows is that window's to put to sleep.
+    const visible = new Set([...(shownId() ? [shownId()] : []), ...elsewhereTabs()])
     const busy = new Set(Object.values(pageState()).filter(page => page.camera || page.microphone).map(page => page.tab))
     const sleepy = tabsToSleep(pages.activity(browser(), visible, busy), Date.now())
     if (sleepy.length) pages.release(sleepy)
@@ -845,7 +920,11 @@ onMount(() => {
 
   <View class="flex-1 pb-[8px] pr-[8px] pt-[8px]" :style="sidebarOpen() ? {} : { paddingLeft: 8 }">
     <View :if="panes().length <= 1" class="overflow-hidden flex-1 rounded-[12px] shadow-lg" :style="{ backgroundColor: scheme() === 'dark' ? '#1d1e24' : '#ffffff' }">
-      <WebView :tab="shownId()" class="flex-1" testID="content" />
+      <WebView :if="!elsewhereTabs().has(shownId())" :tab="shownId()" class="flex-1" testID="content" />
+      <View :if="shownId() && elsewhereTabs().has(shownId())" class="flex-1 gap-[12px] items-center justify-center" testID="shown-elsewhere">
+        <Text class="text-[15px]" :style="{ color: '#6b6e8f' }">This tab is showing in another window.</Text>
+        <Button title="Show Here" variant="primary" testID="show-here" @click="takeTab(shownId())" />
+      </View>
       <View :if="progress() > 0" class="absolute left-0 top-0 h-[2px] bg-[#3b5bfd] duration-200 transition" :style="{ width: (progress() * 100) + '%' }"></View>
     </View>
     <View :if="panes().length > 1" class="flex-1 flex-row gap-[8px]">
@@ -855,7 +934,11 @@ onMount(() => {
           <Text class="flex-1 text-[12px]" :style="{ color: '#3a3d5c' }" :numberOfLines="1">{{ titleOf(pane) }}</Text>
           <Button symbol="xmark" variant="ghost" iconOnly class="text-[10px]" :testID="'leave-' + pane.id" @click="apply(leaveSplit(browser(), pane.id))" />
         </Pressable>
-        <WebView :tab="pane.id" class="flex-1" :testID="'content-' + pane.id" />
+        <WebView :if="!elsewhereTabs().has(pane.id)" :tab="pane.id" class="flex-1" :testID="'content-' + pane.id" />
+        <View :if="elsewhereTabs().has(pane.id)" class="flex-1 gap-[10px] items-center justify-center">
+          <Text class="text-[13px]" :style="{ color: '#6b6e8f' }">Showing in another window.</Text>
+          <Button title="Show Here" variant="primary" :testID="'show-here-' + pane.id" @click="takeTab(pane.id)" />
+        </View>
         <View :if="pane.id === shownId() && progress() > 0" class="absolute left-0 top-0 h-[2px] bg-[#3b5bfd] duration-200 transition" :style="{ width: (progress() * 100) + '%' }"></View>
       </View>
     </View>

@@ -22,6 +22,10 @@ export interface Pages {
   adopt: (id: string, now?: number) => void
   /** Let tabs' pages go; their rows stay, and showing them again reloads them. */
   release: (ids: string[]) => Promise<void>
+  /** Stop counting a page as this window's without closing it: another window shows it now, or it closed with one. */
+  forget: (id: string) => void
+  /** Forget every page the host no longer has (`live` is what `craft.web.list` answers). */
+  prune: (live: Set<string>) => void
   /** What hibernation weighs: every tab with a page, and when it was last shown. */
   activity: (state: BrowserState, visible: Set<string>, busy: Set<string>) => TabActivity[]
 }
@@ -29,6 +33,10 @@ export interface Pages {
 export function createPages(web: WebTabs, options: { private?: boolean } = {}): Pages {
   const shownAt = new Map<string, number>()
   const creating = new Map<string, Promise<unknown>>()
+  const forget = (id: string) => {
+    creating.delete(id)
+    shownAt.delete(id)
+  }
   return {
     has: id => creating.has(id),
     show(tab, profile, now = Date.now()) {
@@ -52,6 +60,10 @@ export function createPages(web: WebTabs, options: { private?: boolean } = {}): 
         shownAt.delete(id)
         return web.close(id).catch(() => {})
       }))
+    },
+    forget,
+    prune(live) {
+      for (const id of [...creating.keys()]) if (!live.has(id)) forget(id)
     },
     activity(state, visible, busy) {
       return [...creating.keys()].flatMap((id) => {
