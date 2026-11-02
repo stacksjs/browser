@@ -235,6 +235,8 @@ async function restore() {
 // Pages wait for the blocker's lists (WebKit has them compiled from an earlier
 // run, so it is quick), or 1.5 s if the agent is slow: no first load goes unblocked.
 const blockerReady = state(false)
+// Whether the blocker has lists in WebKit: the welcome only promises blocking when it is real.
+const blocking = state(false)
 setTimeout(() => blockerReady.set(true), 1500)
 effect(() => {
   if (!blockerReady()) return
@@ -838,7 +840,7 @@ onMount(() => {
     boosts.set(saved)
     await blocker.setBoosts(boostScripts(saved))
     await blocker.allow(unblockedHosts(all))
-    if (settings().blocking) await blocker.sync({ cookieConsent: settings().cookieConsent })
+    if (settings().blocking) blocking.set((await blocker.sync({ cookieConsent: settings().cookieConsent })).lists > 0)
   }).catch(error => console.error('Browser: the ad blocker could not start.', error)).finally(() => blockerReady.set(true))
 })
 </script>
@@ -1060,7 +1062,7 @@ onMount(() => {
         <Text class="font-semibold text-[#3b5bfd] text-[13px]">{{ onboarding() === 'welcome' ? 'WELCOME' : onboarding() === 'import' ? 'BRING YOUR ARC' : onboarding() === 'theme' ? 'MAKE IT YOURS' : onboarding() === 'default' ? 'ONE MORE THING' : 'LET\'S SETTLE IN' }}</Text>
         <Text class="font-bold text-[#14162e] text-[34px]">{{ onboarding() === 'welcome' ? 'A calmer way to browse.' : onboarding() === 'import' ? 'Your spaces, pinned tabs and history, right here.' : onboarding() === 'theme' ? 'Pick a colour for this space.' : onboarding() === 'default' ? 'Open your links here?' : 'A few keys worth knowing.' }}</Text>
 
-        <Text :if="onboarding() === 'welcome'" class="text-[#4a4d6b] text-[15px]">Your tabs live in the sidebar, sorted into spaces. Pin what you keep, and let Today tidy itself. Ads and trackers are blocked from the start.</Text>
+        <Text :if="onboarding() === 'welcome'" class="text-[#4a4d6b] text-[15px]">{{ 'Your tabs live in the sidebar, sorted into spaces. Pin what you keep, and let Today tidy itself.' + (blocking() ? ' Ads and trackers are blocked from the start.' : '') }}</Text>
 
         <View :if="onboarding() === 'import'" class="gap-[10px]">
           <Text class="text-[#4a4d6b] text-[15px]">{{ !arcPreview() ? 'Looking for Arc…' : arcPreview().found ? 'Found in Arc: ' + importSummary(arcPreview().report, arcPreview().historyPages) + '. Arc\'s files are only read, never changed.' : 'Arc is not on this Mac, so there is nothing to bring over.' }}</Text>
