@@ -53,6 +53,11 @@ export interface SessionClient {
   save: (state: BrowserState) => void
   /** Send what is waiting now. Resolves `false` if the agent did not take it (it is sent again next time). */
   flush: () => Promise<boolean>
+  /**
+   * A change another window made and saves itself, applied to what this one
+   * counts as stored too, so it is not sent a second time.
+   */
+  acknowledge: (update: (state: BrowserState) => BrowserState) => void
 }
 
 export function createSessionClient(options: SessionClientOptions): SessionClient {
@@ -99,5 +104,9 @@ export function createSessionClient(options: SessionClientOptions): SessionClien
       if (!timer) timer = setTimeout(() => { void flush() }, flushAfter)
     },
     flush,
+    acknowledge(update) {
+      if (stored) stored = update(stored)
+      if (latest) latest = update(latest)
+    },
   }
 }

@@ -13,6 +13,8 @@ export default {
     appName: 'Browser',
     bundleId: 'com.stacksjs.browser',
     category: 'public.app-category.productivity',
+    // Drawn by resources/assets/icon/draw-icon.swift (swift draw-icon.swift icon.png).
+    icon: 'resources/assets/icon/icon.png',
     agent: true,
     webkit: true,
     defaultBrowser: true,

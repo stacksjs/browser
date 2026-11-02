@@ -20,6 +20,7 @@ export const ACTIONS: BrowserAction[] = [
   { command: 'find', title: 'Find on Page', keywords: 'search text', symbol: 'text.magnifyingglass', needsTab: true },
   { command: 'print', title: 'Print Page', keywords: 'pdf paper', symbol: 'printer', needsTab: true },
   { command: 'view-source', title: 'View Source', keywords: 'html code developer', symbol: 'chevron.left.forwardslash.chevron.right', needsTab: true },
+  { command: 'new-window', title: 'New Window', keywords: 'window', symbol: 'macwindow' },
   { command: 'new-private-window', title: 'New Private Window', keywords: 'incognito', symbol: 'eyeglasses' },
   { command: 'little-arc', title: 'New Little Window', keywords: 'mini quick', symbol: 'macwindow' },
   { command: 'site-controls', title: 'Site Controls', keywords: 'permissions cookies zoom blocker', symbol: 'slider.horizontal.3', needsTab: true },

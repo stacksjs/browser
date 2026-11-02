@@ -8,7 +8,7 @@ export interface MenuItem { id?: string, label?: string, shortcut?: string, sepa
 export interface Menu { label: string, items: MenuItem[] }
 
 export type Command =
-  | 'new-tab' | 'new-private-window' | 'little-arc' | 'reopen-closed' | 'close-tab' | 'open-location'
+  | 'new-tab' | 'new-window' | 'new-private-window' | 'little-arc' | 'reopen-closed' | 'close-tab' | 'open-location'
   | 'copy-url' | 'print' | 'pin-tab' | 'split-view' | 'toggle-sidebar' | 'find' | 'find-next' | 'find-previous'
   | 'reload' | 'hard-reload' | 'back' | 'forward' | 'zoom-in' | 'zoom-out' | 'zoom-reset'
   | 'next-tab' | 'previous-tab' | 'next-space' | 'previous-space' | 'new-space' | 'library' | 'downloads'
@@ -23,6 +23,7 @@ export function browserMenus(): Menu[] {
   return [
     { label: 'File', items: [
       { id: 'new-tab', label: 'New Tab', shortcut: 'cmd+t' },
+      { id: 'new-window', label: 'New Window', shortcut: 'cmd+n' },
       { id: 'new-private-window', label: 'New Private Window', shortcut: 'cmd+shift+n' },
       { id: 'little-arc', label: 'New Little Window', shortcut: 'cmd+alt+n' },
       SEP,
