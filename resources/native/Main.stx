@@ -260,6 +260,44 @@ function rowStyle(row) {
   return showing ? { backgroundColor: palette().selected } : {}
 }
 function textStyle() { return { color: palette().foreground } }
+/** A row is showing when it is the open tab, or a split view holding it. */
+function isShowing(row) {
+  return row.item.id === shownId() || Boolean(row.panes && row.panes.some(pane => pane.id === shownId()))
+}
+/** The symbol a row leads with when it has no picture: a folder, a split view, or a page without a favicon. */
+function rowSymbol(row) {
+  if (row.item.kind === 'folder') return row.item.collapsed ? 'folder' : 'folder.fill'
+  if (isSplitRow(row)) return 'rectangle.split.2x1'
+  return iconFor(row.item) || emojiFor(row.item) ? '' : 'globe'
+}
+/** The fill of the sidebar's address field and favourites: a shade darker than the sidebar. */
+const fieldFill = derived(() => (scheme() === 'dark' ? '#ffffff14' : '#0000000d'))
+const favoriteTiles = derived(() => favorites().map(row => ({
+  id: row.item.id,
+  label: titleOf(row.item),
+  image: iconFor(row.item),
+  emoji: emojiFor(row.item),
+  symbol: iconFor(row.item) || emojiFor(row.item) ? '' : 'globe',
+  active: row.item.id === shownId(),
+  dragData: row.item.id,
+  dragUrl: row.item.url || '',
+  testId: 'favorite-' + row.item.id,
+})))
+/** The command bar's rows: what each result is called, and where it leads. */
+const commandResults = derived(() => results().map(result => ({
+  key: result.kind + result.id,
+  title: result.title,
+  image: result.icon || '',
+  symbol: result.symbol || '',
+  detail: result.kind === 'tab' || result.kind === 'pinned' ? 'Switch to Tab' : result.kind === 'action' ? 'Action' : '',
+})))
+const spaceItems = derived(() => browser().spaces.map(each => ({
+  id: each.id,
+  label: each.name,
+  symbol: isSymbol(each.icon) ? each.icon : '',
+  emoji: isSymbol(each.icon) ? '' : each.icon || '',
+  testId: 'space-' + each.id,
+})))
 // Icons that failed to load (a site with no /favicon.ico) fall back to the globe for this run.
 const brokenIcons = state({})
 function iconFor(item) { return item.icon && item.icon.startsWith('http') && !brokenIcons()[item.icon] ? item.icon : '' }
@@ -858,94 +896,60 @@ onMount(() => {
 })
 </script>
 
-<View class="flex-1 flex-row" :style="{ gradientDirection: 'to-b', gradientFrom: palette().background, gradientTo: palette().backgroundTo || palette().background }">
+<View class="flex-1 flex-row" :style="{ gradientDirection: 'to-br', gradientFrom: palette().background, gradientTo: palette().backgroundTo || palette().background }">
   <View :if="!sidebarOpen() && !peeking()" class="absolute bottom-0 left-0 top-0 w-[10px]" testID="sidebar-edge" @hover-change="peekSidebar($event.hovered)"></View>
-  <View :if="sidebarShown() && restored()" class="gap-[6px] pb-[10px] pl-[10px] pr-[4px] w-[248px]" :style="sidebarOpen() ? {} : { position: 'absolute', left: 0, top: 0, bottom: 0, zIndex: 20, borderRadius: 12, shadowColor: '#000000', shadowOpacity: 0.25, shadowRadius: 18, gradientDirection: 'to-b', gradientFrom: palette().background, gradientTo: palette().backgroundTo || palette().background }" testID="sidebar" @hover-change="sidebarOpen() || peekSidebar($event.hovered)">
-    <View class="flex-row gap-[2px] items-center justify-end pr-[2px] h-[44px]">
-      <Button symbol="sidebar.left" variant="toolbar" iconOnly :style="textStyle()" testID="toggle-sidebar" @click="commands['toggle-sidebar']()" />
-      <Button symbol="arrow.left" variant="toolbar" iconOnly :style="textStyle()" :disabled="!shownPage()?.canGoBack" testID="back" @click="commands.back()" />
-      <Button symbol="arrow.right" variant="toolbar" iconOnly :style="textStyle()" :disabled="!shownPage()?.canGoForward" testID="forward" @click="commands.forward()" />
-      <Button symbol="arrow.clockwise" variant="toolbar" iconOnly :style="textStyle()" testID="reload" @click="commands.reload()" />
+  <View :if="sidebarShown() && restored()" class="pb-[8px] px-[8px] w-[228px]" :style="sidebarOpen() ? {} : { position: 'absolute', left: 0, top: 0, bottom: 0, zIndex: 20, borderRadius: 12, shadowColor: '#000000', shadowOpacity: 0.25, shadowRadius: 18, gradientDirection: 'to-br', gradientFrom: palette().background, gradientTo: palette().backgroundTo || palette().background }" testID="sidebar" @hover-change="sidebarOpen() || peekSidebar($event.hovered)">
+    <View class="flex-row items-center h-[46px]">
+      <Button symbol="sidebar.left" variant="toolbar" iconOnly class="ml-[69px] h-[32px] w-[32px]" :style="textStyle()" testID="toggle-sidebar" @click="commands['toggle-sidebar']()" />
+      <View class="flex-1"></View>
+      <Button symbol="arrow.left" variant="toolbar" iconOnly class="h-[32px] w-[32px]" :style="textStyle()" :disabled="!shownPage()?.canGoBack" testID="back" @click="commands.back()" />
+      <Button symbol="arrow.right" variant="toolbar" iconOnly class="ml-[2px] h-[32px] w-[32px]" :style="textStyle()" :disabled="!shownPage()?.canGoForward" testID="forward" @click="commands.forward()" />
+      <Button symbol="arrow.clockwise" variant="toolbar" iconOnly class="ml-[2px] h-[32px] w-[32px]" :style="textStyle()" testID="reload" @click="commands.reload()" />
     </View>
 
-    <Pressable class="flex-row gap-[6px] items-center pl-[12px] pr-[4px] h-[34px] rounded-[10px] duration-150 transition" :style="{ backgroundColor: palette().hover }" testID="address" @press="openCommand('address')">
-      <Icon :if="shownPage() && shownPage().secure" symbol="lock.fill" class="h-[11px] w-[11px]" :style="{ color: palette().foreground, opacity: 0.6 }" />
-      <Text class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ shownTab() ? displayHost(shownTab().url) : 'Search or enter address' }}</Text>
-      <Button :if="shownSite()" symbol="slider.horizontal.3" variant="ghost" iconOnly class="text-[11px]" :style="textStyle()" testID="site-controls" @click="commands['site-controls']()" />
-    </Pressable>
+    <AddressField :text="shownTab() ? displayHost(shownTab().url) : ''" :secure="Boolean(shownPage() && shownPage().secure)" :controls="Boolean(shownSite())" :tint="palette().foreground" :fill="fieldFill()" @open="openCommand('address')" @copylink="commands['copy-url']()" @controls="commands['site-controls']()" />
 
-    <View :if="!isPrivate && favorites().length" class="flex-row gap-[8px] py-[4px]" @drop="dropOnFavorites($event)">
-      <Pressable :for="row in favorites()" :key="row.item.id" class="flex-1 items-center justify-center h-[44px] bg-white/30 hover:bg-white/50 rounded-[12px] duration-150 transition" :style="rowStyle(row.item)" draggable :drag-data="row.item.id" :drag-url="row.item.url" :testID="'favorite-' + row.item.id" @press="show(row.item.id)" @contextmenu="openRowMenu(row.item)">
-        <Image :if="iconFor(row.item)" :src="iconFor(row.item)" class="h-[18px] w-[18px]" @error="iconFailed(iconFor(row.item))" />
-        <Icon :if="!iconFor(row.item)" name="globe" class="h-[18px] w-[18px]" />
-      </Pressable>
-    </View>
-    <View :if="!isPrivate && !favorites().length" class="items-center justify-center h-[64px] bg-white/15 border border-white/60 rounded-[12px]" @drop="dropOnFavorites($event)">
-      <Text class="font-semibold text-[12px]" :style="textStyle()">Drag to add Favorites</Text>
+    <TileGrid :if="!isPrivate && favorites().length" class="mt-[8px]" :items="favoriteTiles()" :tint="palette().foreground" :fill="fieldFill()" :active-fill="palette().selected" @select="show($event)" @menu="openRowMenu(browser().items[$event])" @drop="dropOnFavorites($event)" @imageerror="iconFailed($event)" />
+    <View :if="!isPrivate && !favorites().length" class="items-center justify-center mt-[8px] h-[64px] rounded-[12px]" :style="{ borderWidth: 1, borderColor: palette().foreground + '26' }" @drop="dropOnFavorites($event)">
+      <Text class="font-semibold text-[12px]" :style="{ color: palette().foreground, opacity: 0.55 }">Drag to add Favorites</Text>
     </View>
 
-    <Pressable class="flex-row gap-[8px] items-center pt-[6px] px-[8px] h-[30px]" testID="space-header" @contextmenu="openSpaceMenu(space().id)">
-      <Icon :if="isSymbol(space().icon)" :symbol="space().icon" class="h-[14px] w-[14px]" :style="textStyle()" />
-      <Text :if="!isSymbol(space().icon)" class="font-semibold text-[13px]" :style="textStyle()">{{ space().icon || '✦' }}</Text>
-      <Text :if="renamingSpace() !== space().id" class="flex-1 font-semibold text-[13px]" :style="textStyle()" :numberOfLines="1">{{ space().name }}</Text>
-      <TextInput :if="renamingSpace() === space().id" class="flex-1 font-semibold text-[13px]" :bordered="false" :value="spaceText()" autofocus select-text-on-focus testID="rename-space" @input="spaceText.set(textOf($event))" @submit="finishSpaceRename()" @blur="finishSpaceRename()" />
-    </Pressable>
-
-    <ScrollView class="flex-1">
-      <Pressable :for="row in pinned()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="{ ...rowStyle(row), paddingLeft: 10 + row.depth * 16 }" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :drop-inside="row.item.kind === 'folder'" :testID="'pinned-' + row.item.id" @press="row.item.kind === 'folder' ? apply(updateItem(browser(), row.item.id, { collapsed: !row.item.collapsed })) : show(row.item.id)" @contextmenu="openRowMenu(row.item)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
-        <Icon :if="row.item.kind === 'folder'" :symbol="row.item.collapsed ? 'folder' : 'folder.fill'" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Icon :if="isSplitRow(row)" symbol="rectangle.split.2x1" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Image :if="row.item.kind === 'tab' && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" @error="iconFailed(iconFor(row.item))" />
-        <Text :if="row.item.kind === 'tab' && !iconFor(row.item) && emojiFor(row.item)" class="w-[16px] text-[13px]">{{ emojiFor(row.item) }}</Text>
-        <Icon :if="row.item.kind === 'tab' && !iconFor(row.item) && !emojiFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Text :if="renaming() !== row.item.id" class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ rowTitle(row) }}</Text>
-        <TextInput :if="renaming() === row.item.id" class="flex-1 text-[13px]" :bordered="false" :value="renameText()" autofocus select-text-on-focus :testID="'rename-' + row.item.id" @input="renameText.set(textOf($event))" @submit="finishRename()" @blur="finishRename()" />
-        <Button :if="hoveredRow() === row.item.id && row.item.kind === 'tab'" symbol="minus" variant="ghost" iconOnly class="text-[11px]" :testID="'unload-' + row.item.id" @click="close(row.item.id)" />
-      </Pressable>
-
-      <View class="flex-row gap-[8px] items-center my-[4px] px-[10px] h-[22px]">
-        <View class="flex-1 h-[1px] bg-black/10"></View>
-        <Pressable :if="today().length" class="justify-center px-[6px] h-[18px] hover:bg-white/40 rounded-[6px]" testID="clear-today" @press="commands['clear-today']()">
-          <Text class="font-semibold text-[11px]" :style="{ color: palette().foreground, opacity: 0.6 }">Clear</Text>
-        </Pressable>
+    <Pressable class="flex-row gap-[2px] items-center mt-[8px] pl-[5px] pr-[6px] h-[36px]" testID="space-header" @contextmenu="openSpaceMenu(space().id)">
+      <View class="items-center justify-center h-[26px] w-[26px]">
+        <Icon :if="isSymbol(space().icon)" :symbol="space().icon" class="h-[15px] w-[16px]" :style="{ color: palette().foreground, opacity: 0.55 }" />
+        <Text :if="!isSymbol(space().icon)" class="text-[14px]" :style="{ color: palette().foreground, opacity: 0.55 }">{{ space().icon || '✦' }}</Text>
       </View>
+      <Text :if="renamingSpace() !== space().id" class="flex-1 font-semibold text-[14px]" :style="{ color: palette().foreground, opacity: 0.55 }" :numberOfLines="1">{{ space().name }}</Text>
+      <TextInput :if="renamingSpace() === space().id" class="flex-1 font-semibold text-[14px]" :bordered="false" :value="spaceText()" autofocus select-text-on-focus testID="rename-space" @input="spaceText.set(textOf($event))" @submit="finishSpaceRename()" @blur="finishSpaceRename()" />
+    </Pressable>
 
-      <Pressable class="flex-row gap-[8px] items-center px-[10px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" testID="new-tab" @press="openCommand('new')">
-        <Icon name="plus" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Text class="flex-1 text-[13px]" :style="{ color: palette().foreground, opacity: 0.75 }">New Tab</Text>
-      </Pressable>
+    <ScrollView class="flex-1 pt-[3px]">
+      <SidebarRow :for="row in pinned()" :key="row.item.id" class="mb-[1px]" :label="rowTitle(row)" :image="row.item.kind === 'tab' ? iconFor(row.item) : ''" :symbol="rowSymbol(row)" :emoji="row.item.kind === 'tab' ? emojiFor(row.item) : ''" :active="isShowing(row)" :strong="row.item.kind === 'folder'" :depth="row.depth" :closable="row.item.kind === 'tab'" close-symbol="minus" :tint="palette().foreground" :active-background="palette().selected" :editing="renaming() === row.item.id" :drag-data="row.item.id" :drag-url="row.item.url || ''" :drop-inside="row.item.kind === 'folder'" :test-id="'pinned-' + row.item.id" @select="row.item.kind === 'folder' ? apply(updateItem(browser(), row.item.id, { collapsed: !row.item.collapsed })) : show(row.item.id)" @close="close(row.item.id)" @menu="openRowMenu(row.item)" @drop="drop(row, $event)" @rename="renameText.set($event); finishRename()" @imageerror="iconFailed($event)" />
 
-      <Pressable :for="row in today()" :key="row.item.id" class="flex-row gap-[8px] items-center pr-[6px] px-[10px] h-[34px] hover:bg-white/35 rounded-[10px] duration-100 transition" :style="rowStyle(row)" draggable :drag-data="row.item.id" :drag-url="row.item.url || ''" :testID="'today-' + row.item.id" @press="show(row.item.id)" @contextmenu="openRowMenu(row.item)" @drop="drop(row, $event)" @hover-change="hoveredRow.set($event.hovered ? row.item.id : null)">
-        <Icon :if="isSplitRow(row)" symbol="rectangle.split.2x1" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Image :if="!isSplitRow(row) && iconFor(row.item)" :src="iconFor(row.item)" class="h-[16px] w-[16px]" @error="iconFailed(iconFor(row.item))" />
-        <Icon :if="!isSplitRow(row) && !iconFor(row.item)" name="globe" class="h-[16px] w-[16px]" :style="textStyle()" />
-        <Text :if="renaming() !== row.item.id" class="flex-1 text-[13px]" :style="textStyle()" :numberOfLines="1">{{ rowTitle(row) }}</Text>
-        <TextInput :if="renaming() === row.item.id" class="flex-1 text-[13px]" :bordered="false" :value="renameText()" autofocus select-text-on-focus :testID="'rename-' + row.item.id" @input="renameText.set(textOf($event))" @submit="finishRename()" @blur="finishRename()" />
-        <Button :if="hoveredRow() === row.item.id && !isSplitRow(row)" symbol="xmark" variant="ghost" iconOnly class="text-[11px]" :testID="'close-' + row.item.id" @click="close(row.item.id)" />
-      </Pressable>
+      <SidebarDivider :action="today().length ? 'Clear' : ''" :tint="palette().foreground" test-id="clear-today" @action="commands['clear-today']()" />
+
+      <SidebarRow class="mb-[1px]" label="New Tab" symbol="plus" muted :tint="palette().foreground" test-id="new-tab" @select="openCommand('new')" />
+
+      <SidebarRow :for="row in today()" :key="row.item.id" class="mb-[1px]" :label="rowTitle(row)" :image="isSplitRow(row) ? '' : iconFor(row.item)" :symbol="rowSymbol(row)" :active="isShowing(row)" :closable="!isSplitRow(row)" :tint="palette().foreground" :active-background="palette().selected" :editing="renaming() === row.item.id" :drag-data="row.item.id" :drag-url="row.item.url || ''" :test-id="'today-' + row.item.id" @select="show(row.item.id)" @close="close(row.item.id)" @menu="openRowMenu(row.item)" @drop="drop(row, $event)" @rename="renameText.set($event); finishRename()" @imageerror="iconFailed($event)" />
     </ScrollView>
 
-    <View class="flex-row gap-[10px] items-center justify-center h-[32px]">
-      <Pressable :for="each in browser().spaces" :key="each.id" class="items-center justify-center h-[22px] w-[22px] rounded-full" :style="each.id === space().id ? { backgroundColor: palette().selected } : { backgroundColor: '#00000000' }" :testID="'space-' + each.id" @press="apply(switchSpace(browser(), each.id))" @contextmenu="openSpaceMenu(each.id)">
-        <Icon :if="isSymbol(each.icon)" :symbol="each.icon" class="h-[11px] w-[11px]" :style="textStyle()" />
-        <Text :if="!isSymbol(each.icon)" class="text-[11px]" :style="textStyle()">{{ each.icon || '●' }}</Text>
-      </Pressable>
-      <Button :if="!isPrivate" symbol="plus" variant="ghost" iconOnly class="text-[11px]" testID="add-space" @click="commands['new-space']()" />
-      <Button :symbol="activeDownloads() ? 'arrow.down.circle.fill' : 'arrow.down.circle'" variant="ghost" iconOnly class="text-[11px]" :style="textStyle()" testID="downloads" @click="commands.downloads()" />
+    <View class="flex-row items-center h-[34px]">
+      <Button :symbol="activeDownloads() ? 'arrow.down.circle.fill' : 'archivebox'" variant="ghost" iconOnly class="h-[32px] w-[32px]" :style="{ color: palette().foreground, opacity: 0.55 }" testID="downloads" @click="activeDownloads() ? commands.downloads() : commands.library()" />
+      <SpaceSwitcher class="flex-1" :items="spaceItems()" :active="space().id" :tint="palette().foreground" @select="apply(switchSpace(browser(), $event))" @menu="openSpaceMenu($event)" />
+      <Button :if="!isPrivate" symbol="plus" variant="ghost" iconOnly class="h-[32px] w-[32px]" :style="{ color: palette().foreground, opacity: 0.55 }" testID="add-space" @click="commands['new-space']()" />
     </View>
   </View>
 
-  <View class="flex-1 pb-[8px] pr-[8px] pt-[8px]" :style="sidebarOpen() ? {} : { paddingLeft: 8 }">
-    <View :if="panes().length <= 1" class="overflow-hidden flex-1 rounded-[12px] shadow-lg" :style="{ backgroundColor: scheme() === 'dark' ? '#1d1e24' : '#ffffff' }">
+  <View class="flex-1 pb-[10px] pr-[10px] pt-[10px]" :style="sidebarOpen() ? {} : { paddingLeft: 10 }">
+    <ContentCard :if="panes().length <= 1" :progress="progress()" :dark="scheme() === 'dark'">
       <WebView :if="!elsewhereTabs().has(shownId())" :tab="shownId()" class="flex-1" testID="content" />
       <View :if="shownId() && elsewhereTabs().has(shownId())" class="flex-1 gap-[12px] items-center justify-center" testID="shown-elsewhere">
         <Text class="text-[15px]" :style="{ color: '#6b6e8f' }">This tab is showing in another window.</Text>
         <Button title="Show Here" variant="primary" testID="show-here" @click="takeTab(shownId())" />
       </View>
-      <View :if="progress() > 0" class="absolute left-0 top-0 h-[2px] bg-[#3b5bfd] duration-200 transition" :style="{ width: (progress() * 100) + '%' }"></View>
-    </View>
+    </ContentCard>
     <View :if="panes().length > 1" class="flex-1 flex-row gap-[8px]">
-      <View :for="pane in panes()" :key="pane.id" class="overflow-hidden flex-1 bg-white rounded-[12px] shadow-lg" :style="pane.id === shownId() ? { borderWidth: 2, borderColor: '#3b5bfd' } : { borderWidth: 2, borderColor: '#00000000' }">
+      <ContentCard :for="pane in panes()" :key="pane.id" :ring="pane.id === shownId()" :progress="pane.id === shownId() ? progress() : 0" :dark="scheme() === 'dark'">
         <Pressable class="flex-row gap-[6px] items-center px-[10px] h-[28px] bg-black/5" :testID="'pane-' + pane.id" @press="show(pane.id)">
           <Image :if="iconFor(pane)" :src="iconFor(pane)" class="h-[14px] w-[14px]" @error="iconFailed(iconFor(pane))" />
           <Text class="flex-1 text-[12px]" :style="{ color: '#3a3d5c' }" :numberOfLines="1">{{ titleOf(pane) }}</Text>
@@ -956,23 +960,12 @@ onMount(() => {
           <Text class="text-[13px]" :style="{ color: '#6b6e8f' }">Showing in another window.</Text>
           <Button title="Show Here" variant="primary" :testID="'show-here-' + pane.id" @click="takeTab(pane.id)" />
         </View>
-        <View :if="pane.id === shownId() && progress() > 0" class="absolute left-0 top-0 h-[2px] bg-[#3b5bfd] duration-200 transition" :style="{ width: (progress() * 100) + '%' }"></View>
-      </View>
+      </ContentCard>
     </View>
   </View>
 
   <View :if="commanding()" class="absolute bottom-0 left-0 right-0 top-0 z-30 items-center pt-[120px] bg-black/10" testID="command-backdrop">
-    <View class="overflow-hidden gap-[8px] p-[10px] w-[620px] bg-white/90 rounded-[16px] shadow-2xl" material="hud">
-      <TextInput class="px-[8px] h-[40px] text-[18px]" :bordered="false" :value="commandText()" autofocus select-text-on-focus placeholder="Search or enter address" testID="command" @input="typeCommand($event)" @keydown="steer($event)" @submit="pick(highlighted())" />
-      <View :if="results().length" class="h-[1px] bg-black/10"></View>
-      <Pressable :for="(result, index) in results()" :key="result.kind + result.id" class="flex-row gap-[10px] items-center px-[10px] h-[40px] rounded-[10px]" :style="index === highlighted() ? { backgroundColor: '#3b5bfd' } : {}" :testID="'result-' + index" @press="pick(index)">
-        <Image :if="result.icon" :src="result.icon" class="h-[16px] w-[16px]" />
-        <Icon :if="!result.icon" :symbol="result.symbol" class="h-[16px] w-[16px]" :style="{ color: index === highlighted() ? '#ffffff' : '#3a3d5c' }" />
-        <Text class="flex-1 text-[14px]" :style="{ color: index === highlighted() ? '#ffffff' : '#1b1d3a' }" :numberOfLines="1">{{ result.title }}</Text>
-        <Text :if="result.kind === 'tab' || result.kind === 'pinned'" class="text-[12px]" :style="{ color: index === highlighted() ? '#ffffffcc' : '#6b6e8f' }">Switch to Tab</Text>
-        <Text :if="result.kind === 'action'" class="text-[12px]" :style="{ color: index === highlighted() ? '#ffffffcc' : '#6b6e8f' }">Action</Text>
-      </Pressable>
-    </View>
+    <CommandBar :value="commandText()" :results="commandResults()" :highlighted="highlighted()" :accent="palette().foreground" @input="typeCommand($event)" @keydown="steer($event)" @submit="pick(highlighted())" @pick="pick($event)" />
   </View>
 
   <View :if="finding()" class="absolute right-[20px] top-[16px] z-20 flex-row gap-[6px] items-center p-[6px] w-[340px] bg-white/95 rounded-[12px] shadow-xl" material="hud" testID="find-bar">

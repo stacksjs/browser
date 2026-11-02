@@ -32,6 +32,8 @@ const DOMAIN = 'craft-native-macos'
 
 /** The newest host build with its screen bundle, or null before `buddy build:desktop` has run. */
 export function builtHost(): { host: string, bundle: string } | null {
+  // A host and bundle built elsewhere (a Craft or stx checkout being tried out).
+  if (process.env.BROWSER_HOST && process.env.BROWSER_BUNDLE) return { host: process.env.BROWSER_HOST, bundle: process.env.BROWSER_BUNDLE }
   const builds = join(ROOT, 'storage/framework/desktop/host')
   if (!existsSync(builds)) return null
   const newest = readdirSync(builds)
@@ -54,6 +56,8 @@ export interface Browser {
   /** The text a control shows (by test ID), or undefined when it is not on screen. */
   text: (target: string, window?: string) => string | undefined
   close: () => Promise<void>
+  /** The host process, to find its window. */
+  pid: number
 }
 
 function fixturePage(name: string): Response {
@@ -99,7 +103,7 @@ const run = async (command: string[]) => { await Bun.spawn(command, { stdout: 'i
  * Opens the browser over a sidebar `seed` builds from fixture page addresses; `build` picks a host
  * other than the newest, `log` keeps the host's stderr, `blocker` serves very-good-adblock's real rules.
  */
-export async function openBrowser(seed: (page: (name: string) => string) => BrowserState, options: { build?: { host: string, bundle: string }, log?: string, blocker?: boolean } = {}): Promise<Browser> {
+export async function openBrowser(seed: (page: (name: string) => string) => BrowserState, options: { build?: { host: string, bundle: string }, log?: string, blocker?: boolean, size?: [number, number] } = {}): Promise<Browser> {
   const built = options.build ?? builtHost()
   if (!built) throw new Error('No host build: run `./buddy build:desktop` first.')
   const temp = mkdtempSync(join(tmpdir(), 'browser-window-test-'))
@@ -114,7 +118,7 @@ export async function openBrowser(seed: (page: (name: string) => string) => Brow
   createSession(db).save(diffSession(null, seed(name => page(name)))!)
 
   const test = join(temp, 'test')
-  const host = Bun.spawn([built.host, '--no-session', '--api-url', `http://127.0.0.1:${server.port}`, '--native-bundle', built.bundle, '--title', 'Browser', '--titlebar-style', 'transparent', '--traffic-lights', '18,15', '--width', '1200', '--height', '800', '--test-dir', test], { stdout: 'ignore', stderr: options.log ? Bun.file(options.log) : 'ignore' })
+  const host = Bun.spawn([built.host, '--no-session', '--api-url', `http://127.0.0.1:${server.port}`, '--native-bundle', built.bundle, '--title', 'Browser', '--titlebar-style', 'transparent', '--traffic-lights', '12,16', '--width', String(options.size?.[0] ?? 1200), '--height', String(options.size?.[1] ?? 800), '--test-dir', test], { stdout: 'ignore', stderr: options.log ? Bun.file(options.log) : 'ignore' })
   const deadline = Date.now() + 20_000
   while (!existsSync(join(test, 'state.json'))) {
     if (Date.now() > deadline) throw new Error('The host did not start')
@@ -128,6 +132,7 @@ export async function openBrowser(seed: (page: (name: string) => string) => Brow
   return {
     page,
     state,
+    pid: host.pid,
     window: prefix => (state().windows as Array<{ name: string }>).map(each => each.name).find(name => name.startsWith(prefix)),
     text(target, window = 'main') {
       const node = state().windows.find((each: { name: string }) => each.name === window)?.nodes.find((each: { id: string, visible: boolean }) => each.id === target && each.visible)

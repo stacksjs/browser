@@ -77,8 +77,10 @@ function readableOn(background: string, hue: Rgb, dark: boolean): string {
 
 function palette(colors: Rgb[], dark: boolean): Palette {
   const [first, second] = [colors[0]!, colors[1] ?? colors[0]!]
-  const background = dark ? shade(first, 0.22, 0.7) : shade(first, 0.86, 0.9)
-  const backgroundTo = colors.length > 1 ? (dark ? shade(second, 0.16, 0.7) : shade(second, 0.78, 0.9)) : (dark ? shade(first, 0.15, 0.7) : shade(first, 0.79, 0.9))
+  // Arc's light spaces are pale washes (lightness about 0.93), a second colour
+  // fading in toward the bottom corner rather than a darker band of the first.
+  const background = dark ? shade(first, 0.22, 0.7) : shade(first, 0.93, 0.95)
+  const backgroundTo = colors.length > 1 ? (dark ? shade(second, 0.16, 0.7) : shade(second, 0.94, 0.95)) : (dark ? shade(first, 0.15, 0.7) : shade(first, 0.89, 0.9))
   return {
     background,
     backgroundTo,
@@ -97,7 +99,7 @@ export function themeFromColors(colors: string[]): SpaceTheme | null {
 
 /** Arc's starting colours, offered when a space is made and in the theme menu. */
 export const THEME_PRESETS: Array<{ id: string, title: string, colors: string[] }> = [
-  { id: 'lavender', title: 'Lavender', colors: ['#8b93f8'] },
+  { id: 'lavender', title: 'Lavender', colors: ['#8b93f8', '#f3a5b8'] },
   { id: 'ocean', title: 'Ocean', colors: ['#5aa9e6', '#3d6ee0'] },
   { id: 'mint', title: 'Mint', colors: ['#5fd3a5'] },
   { id: 'sunset', title: 'Sunset', colors: ['#ff9a62', '#ff5f8f'] },

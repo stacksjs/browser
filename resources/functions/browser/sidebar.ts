@@ -88,7 +88,8 @@ export function newId(): string {
 }
 
 export const DEFAULT_THEME: SpaceTheme = {
-  light: { background: '#c9cffd', backgroundTo: '#aab4fb', foreground: '#1b1d3a', hover: '#ffffff66', selected: '#ffffffcc' },
+  // Arc's own first space: lavender at the top, a blush toward the bottom corner.
+  light: { background: '#e7e6fe', backgroundTo: '#f8edf3', foreground: '#11143f', hover: '#ffffff66', selected: '#ffffffd9' },
   dark: { background: '#26285a', backgroundTo: '#1a1c45', foreground: '#eef0ff', hover: '#ffffff1a', selected: '#ffffff2e' },
 }
 
