@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { blockerApi } from '../../app/Desktop/blocker'
 import { boostsApi, createBoosts } from '../../app/Desktop/boosts'
 import { openBrowserDatabase } from '../../app/Desktop/database'
 import { createDownloads } from '../../app/Desktop/downloads'
@@ -49,16 +50,19 @@ export interface Browser {
   act: (action: Action) => Promise<Result>
   /** The name of the window whose name starts with `prefix` (`window-`, `private-`). */
   window: (prefix: string) => string | undefined
-  state: () => { windows: Array<{ name: string, errors: string[] }>, webViews: number }
+  state: () => { windows: Array<{ name: string, errors: string[], nodes: Array<{ id: string, value?: string, visible: boolean }> }>, webViews: number }
+  /** The text a control shows (by test ID), or undefined when it is not on screen. */
+  text: (target: string, window?: string) => string | undefined
   close: () => Promise<void>
 }
 
 function fixturePage(name: string): Response {
-  return new Response(`<!doctype html><title>${name[0]!.toUpperCase()}${name.slice(1)} page</title><body style="font:20px -apple-system;padding:30px"><h1>${name}</h1><a href="/fixture/beta" target="_blank">new tab</a><div class="ad" style="background:red;color:white;padding:20px">AD</div></body>`, { headers: { 'content-type': 'text/html' } })
+  return new Response(`<!doctype html><title>${name[0]!.toUpperCase()}${name.slice(1)} page</title><body style="font:20px -apple-system;padding:30px"><h1>${name}</h1><a href="/fixture/beta" target="_blank">new tab</a><div class="ad" style="background:red;color:white;padding:20px">AD</div><ins class="adsbygoogle" style="display:block;height:40px">Google ad</ins></body>`, { headers: { 'content-type': 'text/html' } })
 }
 
 /** The agent's routes over `db`, with search suggestions stood in for so nothing leaves the machine. */
-function serveAgent(db: Database) {
+function serveAgent(db: Database, options: { blocker?: boolean }) {
+  const blocker = blockerApi(() => import('very-good-adblock'))
   const session = sessionApi(() => createSession(db))
   const history = historyApi(() => createHistory(db))
   const suggest = suggestApi(createSuggestions({ fetch: async url => Response.json([url, []]) }))
@@ -80,8 +84,9 @@ function serveAgent(db: Database) {
       if (pathname === '/api/sites') return method === 'PUT' ? sites.save(request) : sites.all()
       if (pathname === '/api/boosts') return method === 'PUT' ? boosts.save(request) : method === 'DELETE' ? boosts.remove(request) : boosts.all()
       if (pathname === '/api/downloads') return method === 'POST' ? downloads.record(request) : method === 'DELETE' ? downloads.clear() : downloads.list(request)
-      // The blocker starts with no lists: these tests are about windows, not rules.
-      if (pathname === '/api/blocker') return Response.json({ lists: [], scripts: [] })
+      // Without `blocker` it starts with no lists, for tests about windows rather than rules.
+      if (pathname === '/api/blocker') return options.blocker ? blocker.manifest(request) : Response.json({ lists: [], scripts: [] })
+      if (pathname === '/api/blocker/list' && options.blocker) return blocker.list(request)
       if (pathname === '/api/import/arc') return Response.json({ data: { found: false } })
       return new Response(null, { status: 404 })
     },
@@ -90,8 +95,11 @@ function serveAgent(db: Database) {
 
 const run = async (command: string[]) => { await Bun.spawn(command, { stdout: 'ignore', stderr: 'ignore' }).exited }
 
-/** Opens the browser over a sidebar `seed` builds from fixture page addresses; `build` picks a host other than the newest, `log` keeps the host's stderr. */
-export async function openBrowser(seed: (page: (name: string) => string) => BrowserState, options: { build?: { host: string, bundle: string }, log?: string } = {}): Promise<Browser> {
+/**
+ * Opens the browser over a sidebar `seed` builds from fixture page addresses; `build` picks a host
+ * other than the newest, `log` keeps the host's stderr, `blocker` serves very-good-adblock's real rules.
+ */
+export async function openBrowser(seed: (page: (name: string) => string) => BrowserState, options: { build?: { host: string, bundle: string }, log?: string, blocker?: boolean } = {}): Promise<Browser> {
   const built = options.build ?? builtHost()
   if (!built) throw new Error('No host build: run `./buddy build:desktop` first.')
   const temp = mkdtempSync(join(tmpdir(), 'browser-window-test-'))
@@ -101,7 +109,7 @@ export async function openBrowser(seed: (page: (name: string) => string) => Brow
   await run(['defaults', 'write', DOMAIN, 'craft.native.browser.onboarded', '-bool', 'true'])
 
   const db = openBrowserDatabase(join(temp, 'Browser.sqlite'))
-  const server = serveAgent(db)
+  const server = serveAgent(db, { blocker: options.blocker })
   const page = (name: string, host = '127.0.0.1') => `http://${host}:${server.port}/fixture/${name}`
   createSession(db).save(diffSession(null, seed(name => page(name)))!)
 
@@ -121,6 +129,10 @@ export async function openBrowser(seed: (page: (name: string) => string) => Brow
     page,
     state,
     window: prefix => (state().windows as Array<{ name: string }>).map(each => each.name).find(name => name.startsWith(prefix)),
+    text(target, window = 'main') {
+      const node = state().windows.find((each: { name: string }) => each.name === window)?.nodes.find((each: { id: string, visible: boolean }) => each.id === target && each.visible)
+      return node?.value
+    },
     async act(action) {
       const name = `action-${String(++count).padStart(3, '0')}.json`
       writeFileSync(join(test, name), JSON.stringify(action))
