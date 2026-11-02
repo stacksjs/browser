@@ -11,6 +11,7 @@
         "@stacksjs/path": "^0.75.422",
         "@stacksjs/stx": "0.2.784",
         "stacks": "^0.75.422",
+        "very-good-adblock": "^0.3.6",
       },
       "devDependencies": {
         "@stacksjs/components": "0.2.784",
@@ -432,6 +433,8 @@
     "typescript": ["typescript@7.1.0-dev.20261011.1", "", { "optionalDependencies": { "@typescript/typescript-darwin-arm64": "7.1.0-dev.20261011.1", "@typescript/typescript-darwin-x64": "7.1.0-dev.20261011.1", "@typescript/typescript-linux-arm": "7.1.0-dev.20261011.1", "@typescript/typescript-linux-arm64": "7.1.0-dev.20261011.1", "@typescript/typescript-linux-x64": "7.1.0-dev.20261011.1", "@typescript/typescript-win32-arm64": "7.1.0-dev.20261011.1", "@typescript/typescript-win32-x64": "7.1.0-dev.20261011.1" }, "bin": { "tsc": "bin/tsc" } }, "sha512-Oestzc61TT5cqxAyVxRsbL+pmMF8pzPlsnLcbCqAWqvC0eYQcp8EJrLWatIgjdUh4RiL79avUCHfM8hdkv07xg=="],
 
     "undici-types": ["undici-types@8.12.3", "", {}, "sha512-EXE4ydL3S76dFb27UFjNVZHTyv/TLdATj/KUe29ptdcg6qXL48J2tZ3126E5kICj5jn781OR+XlVH1N6Mz8jbA=="],
+
+    "very-good-adblock": ["very-good-adblock@0.3.6", "", {}, "sha512-GyFnyqChTgmhdH6YsFc0XIzb0szmw9VzN3Cawv82QDqbuGtOOPGQasPbvfOWMY5zp92oQ1ACevcsCdF7zmMTNQ=="],
 
     "very-happy-dom": ["very-happy-dom@0.4.1", "", {}, "sha512-B3DLXirkv0rgKOzItBA7o28VIkuRyhCPbfL2HZZYGCp4ccxun3P5pnXWvE6FmDaWORBExBZzHgl66xNMfu+Pyg=="],
 
