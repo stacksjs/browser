@@ -7,68 +7,45 @@
  * button shows where a pointer hovers. On a touch screen (no hover) the row is
  * 44pt, the touch target the platform asks for, and the button always shows.
  *
- * Every value is a prop the row reads live, so it can stand in a `:for`.
+ * `item` is the row, read live so the component can stand in a `:for`:
+ * `{ label, image?, symbol?, emoji?, active?, strong?, muted?, depth?,
+ * closable?, closeSymbol?, editing?, highlighted?, dragData?, dragUrl?,
+ * dropInside?, testId? }`. One object rather than a prop each: every prop is a
+ * binding and a signal of its own, and a sidebar has dozens of rows.
+ * `theme`: `{ tint, activeBackground?, hoverBackground?, touch? }`, shared by every row; `touch`
+ * (no hovering pointer) makes the row 44pt and always shows its button.
  */
-const label = useReactiveProp('label', '')
-/** A picture for the leading box (a favicon); wins over `symbol` and `emoji`. */
-const image = useReactiveProp('image', '')
-/** A system symbol name (`folder.fill`, `plus`) for the leading box. */
-const symbol = useReactiveProp('symbol', '')
-const emoji = useReactiveProp('emoji', '')
-const active = useReactiveProp('active', false)
-/** A heading row (a folder): the label in semibold. */
-const strong = useReactiveProp('strong', false)
-/** A quiet row (New Tab): the label at half strength. */
-const muted = useReactiveProp('muted', false)
-/** Nesting level; each one indents 16pt. */
-const depth = useReactiveProp('depth', 0)
-/** Shows a close (or `closeSymbol`) button: on hover with a pointer, always on touch. */
-const closable = useReactiveProp('closable', false)
-const closeSymbol = useReactiveProp('closeSymbol', 'xmark')
-/** The text and symbol colour, a space's foreground. */
-const tint = useReactiveProp('tint', '#1b1d3a')
-const activeBackground = useReactiveProp('activeBackground', '#ffffffd9')
-const hoverBackground = useReactiveProp('hoverBackground', '#0000000d')
-/** A ring for a drop landing here. */
-const highlighted = useReactiveProp('highlighted', false)
-/** Edits the label in place; `rename` comes with the new text, `cancel` without. */
-const editing = useReactiveProp('editing', false)
-const dragData = useReactiveProp('dragData', '')
-const dragUrl = useReactiveProp('dragUrl', '')
-/** A folder takes drops inside it. */
-const dropInside = useReactiveProp('dropInside', false)
-const testId = useReactiveProp('testId', '')
-
+const item = useReactiveProp('item', {})
+const theme = useReactiveProp('theme', {})
 const emit = defineEmits(['select', 'close', 'menu', 'drop', 'rename', 'imageerror'])
-const touch = useMediaQuery('(hover: none)')
+// Kept lean on purpose: a sidebar holds dozens of these, and every signal,
+// derived value and effect is a few objects more per row for the collector.
+// The theme carries `touch` (computed once by the parent) for the same reason.
 const hovered = state(false)
-const draft = state('')
+let draft = null
 
-const rowStyle = derived(() => ({
-  height: touch() ? 44 : 40,
-  paddingLeft: 9 + depth() * 16,
-  backgroundColor: active() ? activeBackground() : hovered() ? hoverBackground() : '#00000000',
-  shadowColor: '#000000',
-  shadowOpacity: active() ? 0.08 : 0,
-  shadowRadius: active() ? 2 : 0,
-  shadowOffsetY: active() ? 1 : 0,
-  borderWidth: highlighted() ? 2 : 0,
-  borderColor: highlighted() ? '#3b5bfd' : '#00000000',
-}))
-const labelStyle = derived(() => ({ color: tint(), opacity: muted() ? 0.5 : 1 }))
-const closeShown = derived(() => closable() && !editing() && (touch() || hovered()))
-
-// The field starts from the label each time editing starts.
-effect(() => { if (editing()) draft.set(label()) })
-function finish() { emit('rename', draft().trim()) }
-function typed(event) { draft.set(String(event?.text ?? event?.value ?? event?.target?.value ?? '')) }
+function rowStyle(row, look, over) {
+  return {
+    height: look.touch ? 44 : 40,
+    paddingLeft: 9 + (row.depth || 0) * 16,
+    backgroundColor: row.active ? look.activeBackground || '#ffffffd9' : over ? look.hoverBackground || '#0000000d' : '#00000000',
+    shadowColor: '#000000',
+    shadowOpacity: row.active ? 0.08 : 0,
+    shadowRadius: row.active ? 2 : 0,
+    shadowOffsetY: row.active ? 1 : 0,
+    borderWidth: row.highlighted ? 2 : 0,
+    borderColor: row.highlighted ? '#3b5bfd' : '#00000000',
+  }
+}
+function finish() { emit('rename', (draft ?? item().label ?? '').trim()); draft = null }
+function typed(event) { draft = String(event?.text ?? event?.value ?? event?.target?.value ?? '') }
 </script>
 
-<Pressable class="flex-row gap-[8px] items-center pr-[5px] rounded-[10px] duration-100 transition" :style="rowStyle()" :draggable="Boolean(dragData())" :drag-data="dragData()" :drag-url="dragUrl()" :drop-inside="dropInside()" :testID="testId()" @press="emit('select')" @contextmenu="emit('menu')" @drop="emit('drop', $event)" @hover-change="hovered.set($event.hovered)">
-  <Image :if="image()" :src="image()" class="h-[18px] w-[18px] rounded-[4px]" @error="emit('imageerror', image())" />
-  <Icon :if="!image() && symbol()" :symbol="symbol()" class="h-[17px] w-[18px]" :style="labelStyle()" />
-  <Text :if="!image() && !symbol() && emoji()" class="w-[18px] text-[14px] text-center">{{ emoji() }}</Text>
-  <Text :if="!editing()" class="flex-1 text-[14px]" :class="strong() ? 'font-semibold' : 'font-medium'" :style="labelStyle()" :numberOfLines="1">{{ label() }}</Text>
-  <TextInput :if="editing()" class="flex-1 font-medium text-[14px]" :bordered="false" :value="label()" autofocus select-text-on-focus :testID="testId() + '-rename'" @input="typed($event)" @submit="finish()" @blur="finish()" />
-  <Button :if="closeShown()" :symbol="closeSymbol()" variant="ghost" iconOnly class="text-[11px]" :style="labelStyle()" :testID="testId() + '-close'" @click="emit('close')" />
+<Pressable class="flex-row gap-[8px] items-center pr-[5px] rounded-[10px] duration-100 transition" :style="rowStyle(item(), theme(), hovered())" :draggable="Boolean(item().dragData)" :drag-data="item().dragData || ''" :drag-url="item().dragUrl || ''" :drop-inside="Boolean(item().dropInside)" :testID="item().testId || ''" @press="emit('select')" @contextmenu="emit('menu')" @drop="emit('drop', $event)" @hover-change="hovered.set($event.hovered)">
+  <Image :if="item().image" :src="item().image" class="h-[18px] w-[18px] rounded-[4px]" @error="emit('imageerror', item().image)" />
+  <Icon :if="!item().image && item().symbol" :symbol="item().symbol" class="h-[17px] w-[18px]" :style="{ color: theme().tint || '#1b1d3a', opacity: item().muted ? 0.5 : 1 }" />
+  <Text :if="!item().image && !item().symbol && item().emoji" class="w-[18px] text-[14px] text-center">{{ item().emoji }}</Text>
+  <Text :if="!item().editing" class="flex-1 text-[14px]" :class="item().strong ? 'font-semibold' : 'font-medium'" :style="{ color: theme().tint || '#1b1d3a', opacity: item().muted ? 0.5 : 1 }" :numberOfLines="1">{{ item().label }}</Text>
+  <TextInput :if="item().editing" class="flex-1 font-medium text-[14px]" :bordered="false" :value="item().label" autofocus select-text-on-focus :testID="(item().testId || '') + '-rename'" @input="typed($event)" @submit="finish()" @blur="finish()" />
+  <Button :if="item().closable && !item().editing && (theme().touch || hovered())" :symbol="item().closeSymbol || 'xmark'" variant="ghost" iconOnly class="text-[11px]" :style="{ color: theme().tint || '#1b1d3a', opacity: item().muted ? 0.5 : 1 }" :testID="(item().testId || '') + '-close'" @click="emit('close')" />
 </Pressable>

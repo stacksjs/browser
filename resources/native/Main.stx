@@ -270,6 +270,30 @@ function rowSymbol(row) {
   if (isSplitRow(row)) return 'rectangle.split.2x1'
   return iconFor(row.item) || emojiFor(row.item) ? '' : 'globe'
 }
+/** What a sidebar row shows, for SidebarRow: one object, since every prop is a binding and a signal. */
+function sidebarItem(row, section) {
+  const item = row.item
+  const tab = item.kind === 'tab'
+  return {
+    label: rowTitle(row),
+    image: tab && !isSplitRow(row) ? iconFor(item) : '',
+    symbol: rowSymbol(row),
+    emoji: tab && !isSplitRow(row) ? emojiFor(item) : '',
+    active: isShowing(row),
+    strong: item.kind === 'folder',
+    depth: row.depth,
+    closable: section === 'pinned' ? tab : !isSplitRow(row),
+    closeSymbol: section === 'pinned' ? 'minus' : 'xmark',
+    editing: renaming() === item.id,
+    dragData: item.id,
+    dragUrl: item.url || '',
+    dropInside: item.kind === 'folder',
+    testId: section + '-' + item.id,
+  }
+}
+const NEW_TAB_ROW = { label: 'New Tab', symbol: 'plus', muted: true, testId: 'new-tab' }
+const touchScreen = useMediaQuery('(hover: none)')
+const rowTheme = derived(() => ({ tint: palette().foreground, activeBackground: palette().selected, touch: touchScreen() }))
 /** The fill of the sidebar's address field and favourites: a shade darker than the sidebar. */
 const fieldFill = derived(() => (scheme() === 'dark' ? '#ffffff14' : '#0000000d'))
 const favoriteTiles = derived(() => favorites().map(row => ({
@@ -924,13 +948,13 @@ onMount(() => {
     </Pressable>
 
     <ScrollView class="flex-1 pt-[3px]">
-      <SidebarRow :for="row in pinned()" :key="row.item.id" class="mb-[1px]" :label="rowTitle(row)" :image="row.item.kind === 'tab' ? iconFor(row.item) : ''" :symbol="rowSymbol(row)" :emoji="row.item.kind === 'tab' ? emojiFor(row.item) : ''" :active="isShowing(row)" :strong="row.item.kind === 'folder'" :depth="row.depth" :closable="row.item.kind === 'tab'" close-symbol="minus" :tint="palette().foreground" :active-background="palette().selected" :editing="renaming() === row.item.id" :drag-data="row.item.id" :drag-url="row.item.url || ''" :drop-inside="row.item.kind === 'folder'" :test-id="'pinned-' + row.item.id" @select="row.item.kind === 'folder' ? apply(updateItem(browser(), row.item.id, { collapsed: !row.item.collapsed })) : show(row.item.id)" @close="close(row.item.id)" @menu="openRowMenu(row.item)" @drop="drop(row, $event)" @rename="renameText.set($event); finishRename()" @imageerror="iconFailed($event)" />
+      <SidebarRow :for="row in pinned()" :key="row.item.id" class="mb-[1px]" :item="sidebarItem(row, 'pinned')" :theme="rowTheme()" @select="row.item.kind === 'folder' ? apply(updateItem(browser(), row.item.id, { collapsed: !row.item.collapsed })) : show(row.item.id)" @close="close(row.item.id)" @menu="openRowMenu(row.item)" @drop="drop(row, $event)" @rename="renameText.set($event); finishRename()" @imageerror="iconFailed($event)" />
 
       <SidebarDivider :action="today().length ? 'Clear' : ''" :tint="palette().foreground" test-id="clear-today" @action="commands['clear-today']()" />
 
-      <SidebarRow class="mb-[1px]" label="New Tab" symbol="plus" muted :tint="palette().foreground" test-id="new-tab" @select="openCommand('new')" />
+      <SidebarRow class="mb-[1px]" :item="NEW_TAB_ROW" :theme="rowTheme()" @select="openCommand('new')" />
 
-      <SidebarRow :for="row in today()" :key="row.item.id" class="mb-[1px]" :label="rowTitle(row)" :image="isSplitRow(row) ? '' : iconFor(row.item)" :symbol="rowSymbol(row)" :active="isShowing(row)" :closable="!isSplitRow(row)" :tint="palette().foreground" :active-background="palette().selected" :editing="renaming() === row.item.id" :drag-data="row.item.id" :drag-url="row.item.url || ''" :test-id="'today-' + row.item.id" @select="show(row.item.id)" @close="close(row.item.id)" @menu="openRowMenu(row.item)" @drop="drop(row, $event)" @rename="renameText.set($event); finishRename()" @imageerror="iconFailed($event)" />
+      <SidebarRow :for="row in today()" :key="row.item.id" class="mb-[1px]" :item="sidebarItem(row, 'today')" :theme="rowTheme()" @select="show(row.item.id)" @close="close(row.item.id)" @menu="openRowMenu(row.item)" @drop="drop(row, $event)" @rename="renameText.set($event); finishRename()" @imageerror="iconFailed($event)" />
     </ScrollView>
 
     <View class="flex-row items-center h-[34px]">
@@ -985,7 +1009,7 @@ onMount(() => {
     </View>
   </View>
 
-  <View :if="siteControls() && shownSite()" class="absolute left-[14px] top-[86px] z-30 gap-[10px] p-[14px] w-[300px] bg-white/95 rounded-[14px] shadow-2xl" material="hud" testID="site-panel">
+  <FloatingPanel :if="siteControls() && shownSite()" :width="300" :place="{ left: 14, top: 86 }" test-id="site-panel">
     <View class="flex-row gap-[8px] items-center">
       <Icon :symbol="shownPage() && shownPage().secure ? 'lock.fill' : 'lock.open'" class="h-[14px] w-[14px]" :style="{ color: '#3a3d5c' }" />
       <Text class="flex-1 font-semibold text-[14px]" :style="{ color: '#1b1d3a' }" :numberOfLines="1">{{ shownSite().host }}</Text>
@@ -1012,9 +1036,9 @@ onMount(() => {
     <View class="h-[1px] bg-black/10"></View>
     <Button title="Clear Cookies and Site Data" variant="ghost" testID="site-clear" @click="clearSiteData()" />
     <Button :title="shownBoost() ? 'Edit Boost' : 'Boost This Site'" variant="secondary" testID="site-boost" @click="openBoost()" />
-  </View>
+  </FloatingPanel>
 
-  <View :if="boostEditor() && shownBoost()" class="absolute bottom-[20px] right-[20px] top-[20px] z-30 gap-[10px] p-[14px] w-[360px] bg-white/95 rounded-[14px] shadow-2xl" material="hud" testID="boost-editor">
+  <FloatingPanel :if="boostEditor() && shownBoost()" :width="360" :place="{ right: 20, top: 20, bottom: 20 }" test-id="boost-editor">
     <View class="flex-row gap-[8px] items-center">
       <Icon symbol="paintbrush" class="h-[16px] w-[16px]" :style="{ color: '#3b5bfd' }" />
       <Text class="flex-1 font-semibold text-[14px]" :style="{ color: '#1b1d3a' }" :numberOfLines="1">{{ shownBoost().name }}</Text>
@@ -1032,7 +1056,7 @@ onMount(() => {
       <View class="flex-1"></View>
       <Button title="Delete Boost" variant="ghost" testID="boost-delete" @click="deleteBoost()" />
     </View>
-  </View>
+  </FloatingPanel>
 
   <View :if="peek()" class="absolute bottom-0 left-0 right-0 top-0 z-30 items-center justify-center bg-black/25" testID="peek">
     <View class="overflow-hidden h-[86%] w-[78%] bg-white rounded-[14px] shadow-2xl">
@@ -1045,7 +1069,7 @@ onMount(() => {
     </View>
   </View>
 
-  <View :if="downloadsOpen()" class="absolute bottom-[48px] left-[14px] z-30 gap-[6px] p-[10px] w-[300px] bg-white/95 rounded-[14px] shadow-2xl" material="hud" testID="downloads-panel">
+  <FloatingPanel :if="downloadsOpen()" :width="300" :padding="10" :place="{ left: 14, bottom: 48 }" test-id="downloads-panel">
     <View class="flex-row items-center px-[4px]">
       <Text class="flex-1 font-semibold text-[13px]" :style="{ color: '#1b1d3a' }">Downloads</Text>
       <Button title="Show All" variant="ghost" testID="downloads-all" @click="showAllDownloads()" />
@@ -1063,7 +1087,7 @@ onMount(() => {
       </View>
       <Text class="text-[11px]" :style="{ color: '#6b6e8f' }">{{ downloadDetail(download) }}</Text>
     </Pressable>
-  </View>
+  </FloatingPanel>
 
   <View :if="onboarding()" class="absolute bottom-0 left-0 right-0 top-0 z-40 items-center justify-center bg-black/30" testID="onboarding">
     <View class="overflow-hidden flex-row h-[520px] w-[860px] bg-white rounded-[22px] shadow-2xl">
