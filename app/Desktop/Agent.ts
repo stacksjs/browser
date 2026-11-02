@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { desktopResource } from '@stacksjs/desktop-build'
 import { response, route } from '@stacksjs/router'
 import desktop from '../../config/desktop'
 import { arcApi } from './arc'
@@ -43,8 +44,9 @@ const database = () => (db ??= openBrowserDatabase(join(dataDir, 'Browser.sqlite
 const suggestRoutes = suggestApi(createSuggestions())
 const siteRoutes = sitesApi(() => (sites ??= createSites(database())))
 const arcRoutes = arcApi(() => (history ??= createHistory(database())))
-// very-good-adblock loads on the first request, so launch never waits for its rules.
-const blockerRoutes = blockerApi(() => import('very-good-adblock'))
+// very-good-adblock loads on the first request, so launch never waits for its rules. The built app carries
+// its WebKit lists and scripts in Resources (config/desktop.ts), since a compiled agent has no node_modules.
+const blockerRoutes = blockerApi(() => import('very-good-adblock'), { dir: desktopResource('very-good-adblock') })
 const boostRoutes = boostsApi(() => (boosts ??= createBoosts(database())))
 const downloadRoutes = downloadsApi(() => (downloads ??= createDownloads(database())))
 const historyRoutes = historyApi(() => (history ??= createHistory(database())))

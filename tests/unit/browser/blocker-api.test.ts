@@ -63,6 +63,27 @@ describe('the blocker routes', () => {
   })
 })
 
+describe('the blocker routes in the built app', () => {
+  it('read every list and script from the folder the app carries them in', async () => {
+    const seen: unknown[] = []
+    const library = {
+      webkitManifest: (options?: { dir?: string }) => (seen.push(['manifest', options]), { bridge: { messageHandler: 'h' } }),
+      webkitRuleLists: async (options?: { includeDisabled?: boolean, dir?: string }) => (seen.push(['lists', options]), [{ id: 'l', version: '1', group: 'g', enabled: true, json: '[]' }]),
+      webkitUserScripts: (options?: { dir?: string }) => (seen.push(['scripts', options]), []),
+    }
+    const inBundle = blockerApi(async () => library, { dir: '/App.app/Contents/Resources/very-good-adblock' })
+    expect((await inBundle.manifest(get('/api/blocker'))).status).toBe(200)
+    expect(seen).toEqual([
+      ['manifest', { dir: '/App.app/Contents/Resources/very-good-adblock' }],
+      ['lists', { includeDisabled: true, dir: '/App.app/Contents/Resources/very-good-adblock' }],
+      ['scripts', { dir: '/App.app/Contents/Resources/very-good-adblock' }],
+    ])
+    seen.length = 0
+    await blockerApi(async () => library).manifest(get('/api/blocker'))
+    expect(seen).toEqual([['manifest', {}], ['lists', { includeDisabled: true }], ['scripts', {}]])
+  })
+})
+
 describe('scripts for a host-only user script', () => {
   it('reads extension match patterns as hosts with their subdomains', () => {
     expect(matchedHosts(['*://x.com/*', '*://*.x.com/*', 'https://*.Twitter.com/home*'])).toEqual(['x.com', 'twitter.com'])

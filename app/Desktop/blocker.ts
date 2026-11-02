@@ -15,11 +15,11 @@ export interface BlockerScript {
   source: string
 }
 
-/** The part of very-good-adblock the agent uses. */
+/** The part of very-good-adblock the agent uses. `dir` is where its WebKit lists and scripts are, when not beside its modules. */
 export interface BlockerLibrary {
-  webkitRuleLists: (options?: { includeDisabled?: boolean }) => Promise<BlockerList[]>
-  webkitUserScripts: () => BlockerScript[]
-  webkitManifest: () => { bridge: { messageHandler: string } }
+  webkitRuleLists: (options?: { includeDisabled?: boolean, dir?: string }) => Promise<BlockerList[]>
+  webkitUserScripts: (options?: { dir?: string }) => BlockerScript[]
+  webkitManifest: (options?: { dir?: string }) => { bridge: { messageHandler: string } }
 }
 
 /** A script as the window installs it: the hosts it runs on (none is every site) and the handler it posts to. */
@@ -60,12 +60,16 @@ export function pageScript(script: BlockerScript, bridge: string): PageScript | 
   }
 }
 
-/** `GET /api/blocker` (the lists' versions, the scripts and their bridge) and `GET /api/blocker/list?id=` (one list's rules). */
-export function blockerApi(load: () => Promise<BlockerLibrary>) {
+/**
+ * `GET /api/blocker` (the lists' versions, the scripts and their bridge) and `GET /api/blocker/list?id=` (one list's rules).
+ * `dir` is the library's WebKit data in the built app, which has no node_modules (`macos.agent.resources`).
+ */
+export function blockerApi(load: () => Promise<BlockerLibrary>, options: { dir?: string } = {}) {
   let built: Promise<{ lists: BlockerList[], scripts: PageScript[], bridge: string }> | undefined
+  const at = options.dir ? { dir: options.dir } : {}
   const build = () => built ??= load().then(async (library) => {
-    const bridge = library.webkitManifest().bridge.messageHandler
-    return { lists: await library.webkitRuleLists({ includeDisabled: true }), scripts: library.webkitUserScripts().flatMap(script => pageScript(script, bridge) ?? []), bridge }
+    const bridge = library.webkitManifest(at).bridge.messageHandler
+    return { lists: await library.webkitRuleLists({ includeDisabled: true, ...at }), scripts: library.webkitUserScripts(at).flatMap(script => pageScript(script, bridge) ?? []), bridge }
   })
   // The extension's enabled lists, and the cookie-banner list when asked for; its other off-by-default lists stay off.
   const wanted = (request: Request) => {
