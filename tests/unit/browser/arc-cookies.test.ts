@@ -10,7 +10,8 @@ import type { ArcSignIns, CookieStore } from '../../../resources/functions/brows
 import { createImportClient, keepSignedIn, signInOffer, signInSummary } from '../../../resources/functions/browser/onboarding'
 
 const SECRET = 'fixture-secret'
-const NOW = Date.UTC(2026, 10, 1)
+// The real clock: the route reads cookies against it, so a fixed date would expire the fixtures.
+const NOW = Date.now()
 /** Chromium time: microseconds since 1601. */
 const chromium = (ms: number) => (ms + 11_644_473_600_000) * 1000
 
