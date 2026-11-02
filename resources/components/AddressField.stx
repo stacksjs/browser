@@ -28,6 +28,6 @@ const actionsShown = derived(() => touch() || hovered())
 <Pressable class="flex-row gap-[6px] items-center pl-[12px] pr-[3px] h-[36px] rounded-[10px] duration-150 transition" :style="{ backgroundColor: fill() }" :testID="testId()" @press="emit('open')" @hover-change="hovered.set($event.hovered)">
   <Icon :if="secure()" symbol="lock.fill" class="h-[11px] w-[11px]" :style="{ color: tint(), opacity: 0.55 }" />
   <Text class="flex-1 font-medium text-[14px]" :style="{ color: tint(), opacity: text() ? 0.75 : 0.45 }" :numberOfLines="1">{{ text() || placeholder() }}</Text>
-  <Button :if="actionsShown() && text() && copyable()" symbol="link" variant="ghost" iconOnly class="text-[12px]" :style="{ color: tint() }" :testID="testId() + '-copy'" @click="emit('copylink')" />
-  <Button :if="actionsShown() && controls()" symbol="slider.horizontal.3" variant="ghost" iconOnly class="text-[12px]" :style="{ color: tint() }" testID="site-controls" @click="emit('controls')" />
+  <Button :if="actionsShown() && text() && copyable()" symbol="link" variant="ghost" iconOnly class="text-[12px]" :style="{ color: tint() }" :testID="testId() + '-copy'" @click.stop="emit('copylink')" />
+  <Button :if="actionsShown() && controls()" symbol="slider.horizontal.3" variant="ghost" iconOnly class="text-[12px]" :style="{ color: tint() }" testID="site-controls" @click.stop="emit('controls')" />
 </Pressable>

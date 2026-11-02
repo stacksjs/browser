@@ -32,7 +32,7 @@ function rowStyle(row, look, over) {
     shadowColor: '#000000',
     shadowOpacity: row.active ? 0.08 : 0,
     shadowRadius: row.active ? 2 : 0,
-    shadowOffsetY: row.active ? 1 : 0,
+    shadowOffset: { width: 0, height: row.active ? 1 : 0 },
     borderWidth: row.highlighted ? 2 : 0,
     borderColor: row.highlighted ? '#3b5bfd' : '#00000000',
   }
@@ -47,5 +47,5 @@ function typed(event) { draft = String(event?.text ?? event?.value ?? event?.tar
   <Text :if="!item().image && !item().symbol && item().emoji" class="w-[18px] text-[14px] text-center">{{ item().emoji }}</Text>
   <Text :if="!item().editing" class="flex-1 text-[14px]" :class="item().strong ? 'font-semibold' : 'font-medium'" :style="{ color: theme().tint || '#1b1d3a', opacity: item().muted ? 0.5 : 1 }" :numberOfLines="1">{{ item().label }}</Text>
   <TextInput :if="item().editing" class="flex-1 font-medium text-[14px]" :bordered="false" :value="item().label" autofocus select-text-on-focus :testID="(item().testId || '') + '-rename'" @input="typed($event)" @submit="finish()" @blur="finish()" />
-  <Button :if="item().closable && !item().editing && (theme().touch || hovered())" :symbol="item().closeSymbol || 'xmark'" variant="ghost" iconOnly class="text-[11px]" :style="{ color: theme().tint || '#1b1d3a', opacity: item().muted ? 0.5 : 1 }" :testID="(item().testId || '') + '-close'" @click="emit('close')" />
+  <Button :if="item().closable && !item().editing && (theme().touch || hovered())" :symbol="item().closeSymbol || 'xmark'" variant="ghost" iconOnly class="text-[11px]" :style="{ color: theme().tint || '#1b1d3a', opacity: item().muted ? 0.5 : 1 }" :testID="(item().testId || '') + '-close'" @click.stop="emit('close')" />
 </Pressable>

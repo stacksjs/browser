@@ -13,7 +13,7 @@ const ring = useReactiveProp('ring', false)
 const testId = useReactiveProp('testId', '')
 </script>
 
-<View class="overflow-hidden flex-1 rounded-[10px]" :style="{ backgroundColor: dark() ? '#1d1e24' : '#ffffff', shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 4, shadowOffsetY: 1, borderWidth: ring() ? 2 : 0, borderColor: ring() ? accent() : '#00000000' }" :testID="testId()">
+<View class="overflow-hidden flex-1 rounded-[10px]" :style="{ backgroundColor: dark() ? '#1d1e24' : '#ffffff', shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, borderWidth: ring() ? 2 : 0, borderColor: ring() ? accent() : '#00000000' }" :testID="testId()">
   <slot />
   <View :if="progress() > 0" class="absolute left-0 top-0 h-[2px] duration-200 transition" :style="{ width: (progress() * 100) + '%', backgroundColor: accent() }"></View>
 </View>
