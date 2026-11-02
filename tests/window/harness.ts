@@ -30,17 +30,27 @@ const ROOT = join(import.meta.dir, '../..')
 /** The UserDefaults domain of the bare host binary (craft.storage keys are prefixed `craft.native.`). */
 const DOMAIN = 'craft-native-macos'
 
-/** The newest host build with its screen bundle, or null before `buddy build:desktop` has run. */
+/**
+ * The newest host build, with the screen bundle `buddy build:desktop` last put
+ * into Browser.app.
+ *
+ * The bundle comes from the app, not from beside the cached host: a host is
+ * reused by its own hash, and the screen copied next to it is whatever was
+ * compiled when that host was first built, so tests reading it ran a stale
+ * screen against a new build. The host stays the bare binary (not the one in
+ * Browser.app), whose settings domain is not the person's app.
+ */
 export function builtHost(): { host: string, bundle: string } | null {
   // A host and bundle built elsewhere (a Craft or stx checkout being tried out).
   if (process.env.BROWSER_HOST && process.env.BROWSER_BUNDLE) return { host: process.env.BROWSER_HOST, bundle: process.env.BROWSER_BUNDLE }
   const builds = join(ROOT, 'storage/framework/desktop/host')
-  if (!existsSync(builds)) return null
+  const bundle = join(ROOT, 'storage/framework/desktop/macos/Browser.app/Contents/Resources/native-screen.js')
+  if (!existsSync(builds) || !existsSync(bundle)) return null
   const newest = readdirSync(builds)
     .map(name => join(builds, name))
-    .filter(dir => existsSync(join(dir, 'craft-native-macos')) && existsSync(join(dir, 'native-screen.js')))
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0]
-  return newest ? { host: join(newest, 'craft-native-macos'), bundle: join(newest, 'native-screen.js') } : null
+    .filter(dir => existsSync(join(dir, 'craft-native-macos')))
+    .sort((a, b) => statSync(join(b, 'craft-native-macos')).mtimeMs - statSync(join(a, 'craft-native-macos')).mtimeMs)[0]
+  return newest ? { host: join(newest, 'craft-native-macos'), bundle } : null
 }
 
 export type Action = Record<string, unknown> & { action: string, window?: string }
