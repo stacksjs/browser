@@ -1,7 +1,7 @@
 {
   "name": "browser",
   "type": "module",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Browser",
   "engines": {
@@ -61,11 +61,11 @@
   },
   "dependencies": {
     "@stacksjs/stx": "0.2.780",
-    "stacks": "^0.75.409",
-    "@stacksjs/env": "^0.75.409",
-    "@stacksjs/path": "^0.75.409",
-    "@stacksjs/actions": "^0.75.409",
-    "very-good-adblock": "^0.3.5"
+    "stacks": "^0.75.417",
+    "@stacksjs/env": "^0.75.417",
+    "@stacksjs/path": "^0.75.417",
+    "@stacksjs/actions": "^0.75.417",
+    "very-good-adblock": "^0.3.6"
   },
   "workspaces": [
     "storage/framework",
