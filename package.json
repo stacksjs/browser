@@ -61,10 +61,10 @@
   },
   "dependencies": {
     "@stacksjs/stx": "0.2.782",
-    "stacks": "^0.75.417",
-    "@stacksjs/env": "^0.75.417",
-    "@stacksjs/path": "^0.75.417",
-    "@stacksjs/actions": "^0.75.417",
+    "stacks": "^0.75.420",
+    "@stacksjs/env": "^0.75.420",
+    "@stacksjs/path": "^0.75.420",
+    "@stacksjs/actions": "^0.75.420",
     "very-good-adblock": "^0.3.6"
   },
   "workspaces": [
