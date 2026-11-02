@@ -97,4 +97,24 @@ describe.skipIf(!enabled)('the real window', () => {
     await settle(2000)
     expect((await browser.act({ action: 'web', tab: 'alpha', js: 'getComputedStyle(document.querySelector(\'.ad\')).display' })).value).toBe('none')
   }, 60_000)
+
+  it('blocks with very-good-adblock\'s rules, answers its content script, and stays off a site the person allowed', async () => {
+    browser = await openBrowser(seeded, { blocker: true })
+    const adShown = async () => (await browser!.act({ action: 'web', tab: 'alpha', js: 'getComputedStyle(document.querySelector(\'ins.adsbygoogle\')).display' })).value
+    // The first launch compiles the lists, then the page loads under them.
+    await browser.act({ action: 'command', id: 'reload' })
+    await settle(3000)
+    expect(await adShown()).toBe('none')
+
+    // The content script asked the browser for its settings and reported what it hid, both over its bridge.
+    await browser.act({ action: 'command', id: 'site-controls' })
+    await settle(500)
+    expect(browser.text('site-blocked-count')).toMatch(/^\d+ ads? hidden on this page$/)
+
+    // Allowed: no list applies, and the content script, told so in its settings, hides nothing.
+    expect((await browser.act({ action: 'press', target: 'site-blocking' })).ok).toBe(true)
+    await settle(3000)
+    expect(await adShown()).toBe('block')
+    expect(browser.state().windows.flatMap(window => window.errors)).toEqual([])
+  }, 60_000)
 })

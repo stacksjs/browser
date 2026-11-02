@@ -15,7 +15,8 @@ export default {
     category: 'public.app-category.productivity',
     // Drawn by resources/assets/icon/draw-icon.swift (swift draw-icon.swift icon.png).
     icon: 'resources/assets/icon/icon.png',
-    agent: true,
+    // very-good-adblock reads its WebKit rule lists and scripts from files, which the built app carries in Resources.
+    agent: { resources: { 'very-good-adblock': 'node_modules/very-good-adblock/dist/webkit' } },
     webkit: true,
     defaultBrowser: true,
     permissions: {

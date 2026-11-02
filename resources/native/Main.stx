@@ -84,7 +84,16 @@ const historyClient = createHistoryClient({ base: craft.app.url || '', isPrivate
 // What the browser remembers per site (blocker, zoom, camera and microphone), and the ad blocker.
 const sitesClient = createSitesClient({ base: craft.app.url || '' })
 const sites = state({})
-const blocker = createBlocker({ base: craft.app.url || '', web })
+// How many ads each tab's page hid, as the blocker's content script reports them.
+const blockedCounts = state({})
+const blocker = createBlocker({ base: craft.app.url || '', web, onBlocked: (tab, count) => blockedCounts.set({ ...blockedCounts(), [tab]: count }) })
+function newPageFor(tab) {
+  blocker.newPage(tab)
+  if (!(tab in blockedCounts())) return
+  const next = { ...blockedCounts() }
+  delete next[tab]
+  blockedCounts.set(next)
+}
 const shownSite = derived(() => settingsFor(sites(), siteKey(shownTab() && shownTab().url)))
 const siteControls = state(false)
 // Requests for the camera or microphone waiting for an answer, oldest first.
@@ -809,7 +818,11 @@ onMount(() => {
     }
     else newTab(event.url, event.background)
   })
-  web.on('close', event => close(event.tab))
+  web.on('close', (event) => {
+    newPageFor(event.tab)
+    close(event.tab)
+  })
+  web.on('navigationStart', event => newPageFor(event.tab))
   web.on('download', (event) => {
     const next = applyDownload(liveDownloads()[event.id], event)
     liveDownloads.set({ ...liveDownloads(), [event.id]: next })
@@ -987,7 +1000,10 @@ onMount(() => {
     </View>
     <View class="h-[1px] bg-black/10"></View>
     <View class="flex-row items-center">
-      <Text class="flex-1 text-[13px]" :style="{ color: '#1b1d3a' }">Block ads and trackers</Text>
+      <View class="flex-1 gap-[2px]">
+        <Text class="text-[13px]" :style="{ color: '#1b1d3a' }">Block ads and trackers</Text>
+        <Text :if="shownSite().blocking && (blockedCounts()[shownId()] || 0) > 0" class="text-[11px]" :style="{ color: '#6b6e8f' }" testID="site-blocked-count">{{ blockedCounts()[shownId()] + (blockedCounts()[shownId()] === 1 ? ' ad hidden on this page' : ' ads hidden on this page') }}</Text>
+      </View>
       <Switch :value="shownSite().blocking" testID="site-blocking" @change="toggleBlocking()" />
     </View>
     <View class="flex-row gap-[6px] items-center">
