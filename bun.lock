@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "stacks",
+      "name": "browser",
       "dependencies": {
         "@stacksjs/actions": "^0.75.422",
         "@stacksjs/desktop-build": "^0.75.422",
@@ -16,6 +16,7 @@
         "@stacksjs/components": "0.2.784",
         "better-dx": "^0.2.37",
         "bun-plugin-stx": "0.2.784",
+        "craft-native": "^0.0.424",
       },
     },
     "storage/framework": {
@@ -354,7 +355,7 @@
 
     "bun-plugin-stx": ["bun-plugin-stx@0.2.784", "", { "dependencies": { "@stacksjs/stx": "0.2.784", "stx-router": "0.2.784" }, "bin": { "serve": "./dist/serve.js", "stx-serve": "./dist/serve.js" } }, "sha512-dEJwpko8cSTuzi+NLW2DPluad1paiK+Bv72H+iVYWgt4wRjKKkag9MWHjqen1bgBMfXGzgKtK8y5UVAsHABFDg=="],
 
-    "bun-query-builder": ["bun-query-builder@0.3.32", "", { "dependencies": { "@stacksjs/clapp": "^0.2.16", "@stacksjs/ts-faker": "^0.1.8", "@stacksjs/ts-validation": "^0.5.6", "dynamodb-tooling": "^0.3.6" }, "bin": { "qb": "./dist/bin/cli.js", "qbx": "./dist/bin/cli.js", "query-builder": "./dist/bin/cli.js" } }, "sha512-teZjmVC6Tx0Jo1godcX6gvwjMwhkEX9VwBk0RmI3bCrlWma/HhDPgGvsbyX74pexORz1pOECNNhp5b1nI5XYRQ=="],
+    "bun-query-builder": ["bun-query-builder@0.3.33", "", { "dependencies": { "@stacksjs/clapp": "^0.2.16", "@stacksjs/ts-faker": "^0.1.8", "@stacksjs/ts-validation": "^0.5.6", "dynamodb-tooling": "^0.3.6" }, "bin": { "qb": "./dist/bin/cli.js", "qbx": "./dist/bin/cli.js", "query-builder": "./dist/bin/cli.js" } }, "sha512-TMobgIhkUOJkUL3OTNBcFTZns4ufSG+Wg8es9l3aznIwn66F1fCb5EYBl58q5DjhXFviZRDirx+zRPom41u99w=="],
 
     "bun-types": ["bun-types@1.4.4", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ=="],
 
@@ -362,7 +363,7 @@
 
     "clone": ["clone@2.1.2", "", {}, "sha512-3Pe/CF1Nn94hyhIYpjtiLhdCoEoz0DqQ+988E9gmeEdQZlojxnOb74wctFyuwWQHzqyf9X7C7MG8juUpqBJT8w=="],
 
-    "craft-native": ["craft-native@0.0.420", "", { "bin": { "craft-sdk": "dist/cli.js" } }, "sha512-flIScqdNq3FGt2Pltb6qAAsxkjnyp6mKDImExZer/r1PUvFfnujaAwxHK6DhImIpNW2V3Z9XSv+hHpOqM0i+Hw=="],
+    "craft-native": ["craft-native@0.0.424", "", { "bin": { "craft-sdk": "dist/cli.js" } }, "sha512-EsyxF0X9xRECELvMCWVSErhKcVqHbxffgC6WqoSXv8L5bh+VRx2sLupoaIJFlvVPfkfcLP+7zzpJH9We/Rl21Q=="],
 
     "cz-git": ["cz-git@1.14.0", "", {}, "sha512-QjwlXZrGWsXQkyregBHhA2qNNGB2TCuf0ovkW1Q5OLgdJDs9Tq1yahfKpSMLyqOBjVRuv1iHBTDP83zJDBlJdg=="],
 
@@ -410,7 +411,7 @@
 
     "ts-medium-editor": ["ts-medium-editor@0.2.0", "", {}, "sha512-XR4Orpxm1v9OfP6dCMImYpPaqdJUdoRl3laUUiPB9dR9WJHSFbWZmHCBdPG3uiQiaQljeSssKQTZTUcfQnsj3g=="],
 
-    "ts-pantry": ["ts-pantry@0.11.152", "", { "dependencies": { "@stacksjs/bumpx": "^0.2.29", "@stacksjs/env": "^0.75.311" }, "bin": { "ts-pantry": "./dist/bin/cli.js", "pantry-desktop": "./dist/bin/desktop.js" } }, "sha512-rkos12JkumByb35SFDw17S1H5WDgEI+LsrN9g5v55ajh2E8t5w9tsnuad2qARcSxHpVHCrSh8PCZ/TrNIrAocw=="],
+    "ts-pantry": ["ts-pantry@0.11.158", "", { "dependencies": { "@stacksjs/bumpx": "^0.2.29", "@stacksjs/env": "^0.75.311" }, "bin": { "ts-pantry": "./dist/bin/cli.js", "pantry-desktop": "./dist/bin/desktop.js" } }, "sha512-hI2mRLC7yB/7p788zBi+6bv0hJWG+g7vzUC0ELbgOyL+3nU9v8FIY64MSKtLyDATV2BNfYujMhcSTFONCQWaMQ=="],
 
     "ts-qr-codes": ["ts-qr-codes@0.1.9", "", { "bin": { "qrx": "./dist/cli.js" } }, "sha512-q2U4hjgx+L57IsCKew/+an/P+mdcvRLr2tlW4waOaulRCpm5OZLakZ32czjscUaHiGOIeG13J28lxUawyIc9/Q=="],
 
@@ -430,8 +431,10 @@
 
     "typescript": ["typescript@7.1.0-dev.20261011.1", "", { "optionalDependencies": { "@typescript/typescript-darwin-arm64": "7.1.0-dev.20261011.1", "@typescript/typescript-darwin-x64": "7.1.0-dev.20261011.1", "@typescript/typescript-linux-arm": "7.1.0-dev.20261011.1", "@typescript/typescript-linux-arm64": "7.1.0-dev.20261011.1", "@typescript/typescript-linux-x64": "7.1.0-dev.20261011.1", "@typescript/typescript-win32-arm64": "7.1.0-dev.20261011.1", "@typescript/typescript-win32-x64": "7.1.0-dev.20261011.1" }, "bin": { "tsc": "bin/tsc" } }, "sha512-Oestzc61TT5cqxAyVxRsbL+pmMF8pzPlsnLcbCqAWqvC0eYQcp8EJrLWatIgjdUh4RiL79avUCHfM8hdkv07xg=="],
 
-    "undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+    "undici-types": ["undici-types@8.12.3", "", {}, "sha512-EXE4ydL3S76dFb27UFjNVZHTyv/TLdATj/KUe29ptdcg6qXL48J2tZ3126E5kICj5jn781OR+XlVH1N6Mz8jbA=="],
 
     "very-happy-dom": ["very-happy-dom@0.4.1", "", {}, "sha512-B3DLXirkv0rgKOzItBA7o28VIkuRyhCPbfL2HZZYGCp4ccxun3P5pnXWvE6FmDaWORBExBZzHgl66xNMfu+Pyg=="],
+
+    "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
   }
 }
