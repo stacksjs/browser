@@ -60,13 +60,13 @@
     "test:window": "./buddy build:desktop && BROWSER_WINDOW_TESTS=1 bun test tests/window"
   },
   "dependencies": {
-    "@stacksjs/stx": "0.2.798",
-    "stacks": "^0.75.465",
-    "@stacksjs/env": "^0.75.465",
-    "@stacksjs/path": "^0.75.465",
-    "@stacksjs/actions": "^0.75.465",
-    "@stacksjs/desktop-build": "^0.75.465",
-    "very-good-adblock": "^0.3.6"
+    "@stacksjs/stx": "0.2.820",
+    "stacks": "^0.75.513",
+    "@stacksjs/env": "^0.75.513",
+    "@stacksjs/path": "^0.75.513",
+    "@stacksjs/actions": "^0.75.513",
+    "@stacksjs/desktop-build": "^0.75.513",
+    "very-good-adblock": "^0.3.7"
   },
   "workspaces": [
     "storage/framework",
@@ -82,9 +82,9 @@
     "commit-msg": "bun x gitlint --edit \"$1\""
   },
   "devDependencies": {
-    "@stacksjs/components": "0.2.798",
-    "better-dx": "^0.2.37",
-    "craft-native": "^0.0.449",
-    "bun-plugin-stx": "0.2.798"
+    "@stacksjs/components": "0.2.820",
+    "better-dx": "^0.2.38",
+    "craft-native": "^0.0.482",
+    "bun-plugin-stx": "0.2.820"
   }
 }
